@@ -414,6 +414,66 @@
           <div id="judge-result" class="hint">尚无结果。</div>
         </div>
       </div>
+
+      <div class="card" id="batch-card">
+        <div class="card-head">
+          <h3>批量本地评测</h3>
+          <span id="batch-status-badge" class="badge muted">尚未运行</span>
+        </div>
+        <p class="hint">后台逐条复评并与 OJ verdict 交叉验证。800–4800 条可能需要数分钟，可轮询进度或离开页面；不会修改 OJ。结果同时写入 <code>analysis/&lt;域名&gt;/&lt;作业&gt;/judge_batch.json</code> 与 <code>.csv</code>。</p>
+        <div class="filters">
+          <label>题目
+            <select id="batch-problem">
+              <option value="">全部题目</option>
+            </select>
+          </label>
+          <label>限制条数
+            <input id="batch-limit" type="number" value="50" min="1" max="10000">
+          </label>
+          <label>语言
+            <select id="batch-language">
+              <option value="">自动识别</option>
+              <option value="python">Python</option>
+              <option value="c">C</option>
+              <option value="cpp">C++</option>
+            </select>
+          </label>
+          <label class="check"><input id="batch-accepted-only" type="checkbox"> 只评测 OJ 已通过</label>
+        </div>
+        <div class="form-actions">
+          <button id="btn-batch-problem" class="btn primary" type="button">评测本题全部提交</button>
+          <button id="btn-batch-all" class="btn" type="button">评测全部已采集提交</button>
+          <button id="btn-batch-limit" class="btn ghost" type="button">评测前 N 条</button>
+        </div>
+
+        <div id="batch-progress-wrap" class="batch-progress hidden">
+          <div class="batch-progress-head">
+            <span id="batch-progress-label" class="muted small">等待任务…</span>
+            <span id="batch-job-meta" class="muted small"></span>
+          </div>
+          <div class="progress-track"><div id="batch-progress-bar" class="progress-fill" style="width:0%"></div></div>
+          <pre id="batch-log" class="log-view batch-log" aria-live="polite">暂无日志。</pre>
+        </div>
+
+        <div id="batch-result" class="hidden">
+          <div id="batch-summary" class="stat-grid mt-12"></div>
+          <div class="filters mt-12">
+            <label class="check"><input id="batch-mismatch" type="checkbox"> 只看本地与 OJ 不一致</label>
+            <span id="batch-result-meta" class="muted small"></span>
+          </div>
+          <div class="table-wrap batch-table-wrap">
+            <table>
+              <thead><tr><th>RID</th><th>题目</th><th>学生</th><th>语言</th><th>本地状态</th><th>OJ 状态</th><th>一致</th><th>得分</th><th>通过</th><th>用时</th></tr></thead>
+              <tbody id="batch-rows"><tr><td colspan="10" class="empty-cell">暂无批量评测结果。</td></tr></tbody>
+            </table>
+          </div>
+          <div class="form-actions mt-12">
+            <a id="batch-json-link" class="btn ghost small hidden" href="#" target="_blank" rel="noopener">下载 JSON</a>
+            <a id="batch-csv-link" class="btn ghost small hidden" href="#" target="_blank" rel="noopener">下载 CSV</a>
+            <span id="batch-output-path" class="muted small"></span>
+          </div>
+        </div>
+      </div>
     </section>
   </main>
 

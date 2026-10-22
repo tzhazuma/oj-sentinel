@@ -119,6 +119,14 @@ jobs:
           java-version: "17"
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+          accept-android-sdk-licenses: false
+      - name: Accept Android licenses and ensure packages
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME" -path '*/cmdline-tools/*/bin/sdkmanager' | sort -V | tail -1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" >/dev/null
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:

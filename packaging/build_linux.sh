@@ -32,7 +32,7 @@ esac
 
 cd "$ROOT"
 
-if [[ ! -x "$PYTHON" ]]; then
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
   echo "error: python not found at $PYTHON (set PYTHON=... or create .venv)" >&2
   exit 1
 fi
@@ -127,6 +127,10 @@ CONTROL
 else
   echo "warning: dpkg-deb unavailable; skipped .deb" >&2
 fi
+
+# Keep dist/ limited to shippable artifacts; intermediate trees are disposable.
+rm -rf "$APPDIR"
+rm -rf "$DIST/debroot"
 
 echo
 echo "Smoke test (no window, no WebKit needed):"

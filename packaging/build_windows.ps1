@@ -26,7 +26,7 @@ $Exe = Join-Path $Root 'dist\OJ Sentinel.exe'
 $Zip = Join-Path $Root "dist\OJ-Sentinel-$Version-windows-$Arch.zip"
 
 Set-Location $Root
-if (-not (Test-Path $Python)) {
+if (-not (Get-Command $Python -ErrorAction SilentlyContinue)) {
     throw "python not found at $Python (set `$env:PYTHON or create .venv)"
 }
 & $Python -c "import PyInstaller" 2>$null

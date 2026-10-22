@@ -25,7 +25,7 @@ DIST="$ROOT/dist"
 
 cd "$ROOT"
 
-if [[ ! -x "$PYTHON" ]]; then
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
   echo "error: python not found at $PYTHON (set PYTHON=... or create .venv)" >&2
   exit 1
 fi

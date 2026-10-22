@@ -514,7 +514,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--data-dir")
     sp.add_argument("--provider", help="dsh (default) | openai | mock | offline")
     sp.add_argument("--model", default="deepseek-v4.1-flash")
-    sp.add_argument("--timeout", type=float, default=180.0)
+    sp.add_argument("--timeout", type=float, default=300.0)
     sp.add_argument("--rid")
     sp.add_argument("--rid-a")
     sp.add_argument("--rid-b")
