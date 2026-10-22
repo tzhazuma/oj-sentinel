@@ -1,0 +1,165 @@
+name: build
+
+'on':
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,desktop]"
+      - name: Pytest
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q
+
+  desktop:
+    name: desktop (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+          - os: windows-latest
+            name: windows
+          - os: ubuntu-latest
+            name: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Linux window/runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-0 gir1.2-webkit2-4.1 python3-gi \
+            libgtk-3-0 file desktop-file-utils dpkg
+      - name: Install desktop dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[desktop]"
+
+      - name: Build macOS .app/.dmg
+        if: runner.os == 'macOS'
+        env:
+          PYTHON: python
+        run: bash packaging/build_macos.sh
+      - name: Build Windows .exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PYTHON: python
+        run: ./packaging/build_windows.ps1
+      - name: Build Linux AppImage/.deb
+        if: runner.os == 'Linux'
+        env:
+          PYTHON: python
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: bash packaging/build_linux.sh
+
+      - name: Smoke test macOS bundle
+        if: runner.os == 'macOS'
+        run: python packaging/smoke_desktop.py "dist/OJ Sentinel.app/Contents/MacOS/OJ Sentinel"
+      - name: Smoke test Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python packaging/smoke_desktop.py "dist/OJ Sentinel.exe"
+      - name: Smoke test Linux binary
+        if: runner.os == 'Linux'
+        run: python packaging/smoke_desktop.py "dist/OJ-Sentinel/OJ Sentinel"
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OJ-Sentinel-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.exe
+
+  android:
+    name: android (debug APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.12"
+      - name: Point Gradle at the SDK
+        working-directory: android
+        run: printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+      - name: Inspect APK package
+        run: |
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
+          "$AAPT" dump badging android/app/build/outputs/apk/debug/app-debug.apk | head -20
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             dist/OJ-Sentinel-0.1.0-android-debug.apk
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: OJ-Sentinel-android
+          if-no-files-found: error
+          path: dist/*.apk
+
+  release:
+    name: release (tag)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [desktop, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - name: List release files
+        run: ls -lah release-artifacts
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false

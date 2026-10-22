@@ -1,13 +1,15 @@
 # OJ Sentinel
 
-> Hydro OJ 作业数据采集 · 代码查重 · 异常行为分析 · AI 自动评测 · 跨平台 GUI
+> Hydro OJ 作业数据采集 · 多语言代码查重 · 异常行为分析 · 本地评测 / AI 评测 · 跨平台 GUI
 
 OJ Sentinel（OJ 哨兵）是一个面向课程 OJ（默认支持 Hydro v4）的教学质控工具。教师输入 OJ 地址、域名与账号后，工具会自动发现作业、题目、测试数据和全部学生提交，随后在本地完成：
 
-- **多算法查重**：winnowing 指纹 + token n-gram + Python AST/结构特征 + 可选 AI 语义复核；不把学生代码上传到第三方。
+- **多算法查重**：winnowing 指纹 + token n-gram + Python AST / C/C++ 结构特征 + 可选 AI 语义复核；不把学生代码上传到第三方。查重只在**不同学生**之间配对；同一学生的多次提交只进入异常行为分析。
 - **异常行为检测**：短时间批量提交、提交间突变、首次提交即通过、AI 生成/粘贴特征、跨用户同源代码。
 - **AI 智能分析**：默认使用 [DeepSeek Harness (dsh)](https://github.com/tzhazuma/dsh-android) 作为 agent；模型可自定义（默认 `opencode-go-2 / deepseek-v4.1-flash`）。
-- **自动评测**：读取 OJ 测试数据本地复评，与 OJ verdict 交叉验证；AI 生成补充测试；对失败提交给出可执行的纠错建议。
+- **本地评测**：读取 OJ 测试数据，支持 Python / C / C++ 编译运行；可单条、批量（按题目或全部提交）评测，并与 OJ verdict 交叉验证；AI 生成补充测试、对失败提交给出纠错建议。
+- **作品 / 小游戏 AI 评测**：对 OJ 无法自动判分的开放式作业（小游戏、项目）按 rubric 给出 AI 评分、逐项理由、证据与置信度，并强制标注“需人工复核”；教师保留最终分数决定权。
+- **成绩口径**：每个学生每道题的最终得分 = 该题**最后一次提交**的得分；查重则覆盖**全部提交**，避免遗漏。
 - **跨平台**：Web GUI、macOS/Windows/Linux 桌面应用、Android App。
 
 > 隐私：学生姓名、账号、代码和测试数据只保存在本机 `data/`；该目录已被 `.gitignore` 排除。报告默认支持匿名化导出。
@@ -27,6 +29,18 @@ ojs acquire --url http://YOUR_HYDRO_HOST --domain YOUR_DOMAIN \
   --username YOUR_USERNAME --homework YOUR_HOMEWORK_ID
 ojs analyze --homework YOUR_HOMEWORK_ID
 ojs report --homework YOUR_HOMEWORK_ID --open
+
+# 本地评测：单条 / 批量（本题 / 全部提交）
+ojs judge --homework YOUR_HOMEWORK_ID --rid <rid>
+ojs judge --homework YOUR_HOMEWORK_ID --problem HW2001 --limit 100
+ojs judge --homework YOUR_HOMEWORK_ID --all --output data/judge_all.json
+
+# AI 复核一对可疑提交 / 失败诊断 / 小游戏作品评测
+ojs ai review --homework YOUR_HOMEWORK_ID --pair-index 0
+ojs ai diagnose --homework YOUR_HOMEWORK_ID --rid <rid>
+ojs ai evaluate-game --provider dsh --assignment examples/game_project/README.md \
+  --rubric examples/game_project/rubric.md --files examples/game_project/snake_game.py
+
 ojs serve
 ```
 
@@ -44,8 +58,8 @@ ojs serve
 | `ojs ingest` | 将快照写入 SQLite 索引 |
 | `ojs analyze` | 查重 + 异常行为 + 聚类，输出 JSON |
 | `ojs report` | 生成 HTML/CSV/JSON 报告 |
-| `ojs judge` | 本地评测与 OJ 交叉验证 |
-| `ojs ai` | AI 复核 / 诊断 / 测试生成 |
+| `ojs judge` | 单条 / 批量本地评测 + OJ 交叉验证（`--all` 全部提交） |
+| `ojs ai` | AI 复核 / 诊断 / 测试生成 / 作品与游戏 rubric 评测 |
 | `ojs serve` | 启动 Web GUI |
 | `ojs desktop` | 启动桌面壳 |
 

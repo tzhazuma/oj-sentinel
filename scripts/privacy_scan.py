@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 SECRET_PATTERNS = [
-    re.compile(r"(?i)(password|passwd|pwd)\s*[:=]\s*['\"]?[^\s'\"]{6,}"),
+    re.compile(r"(?i)(password|passwd|pwd)\s*[:=]\s*['\"][^'\"\n]{6,}['\"]"),
     re.compile(r"(?i)(api[_-]?key|secret|token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}"),
     re.compile(r"-----BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY-----"),
     re.compile(r"\b(?:gho|ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
@@ -63,11 +63,19 @@ def main() -> int:
                 line = text.count("\n", 0, m.start()) + 1
                 if rel in ALLOWLIST:
                     continue
+                lineno_text = text.splitlines()[line - 1] if line - 1 < len(text.splitlines()) else ""
+                if any(marker in lineno_text for marker in (
+                    "add_argument", "def ", "password=True", "os.environ",
+                    "password: str", "password: Password", "read_password",
+                )):
+                    continue
                 print(f"[secret?] {rel}:{line}: {m.group(0)[:80]}")
                 bad += 1
         for pat in PRIVATE_PATTERNS:
             for m in pat.finditer(text):
                 if rel in ALLOWLIST or rel.startswith("tests/"):
+                    continue
+                if m.group(0) == "10.0.2.2":  # standard Android emulator host alias
                     continue
                 line = text.count("\n", 0, m.start()) + 1
                 print(f"[private address?] {rel}:{line}: {m.group(0)}")

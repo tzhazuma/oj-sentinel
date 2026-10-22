@@ -24,6 +24,27 @@ KEEP_NAMES = BUILTIN_NAMES
 C_STYLE_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 HASH_COMMENT = re.compile(r"#[^\n]*")
 
+C_KEYWORDS = {
+    "auto", "break", "case", "char", "const", "continue", "default", "do", "double",
+    "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long",
+    "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct",
+    "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "_Bool",
+    "class", "namespace", "template", "typename", "public", "private", "protected",
+    "virtual", "override", "new", "delete", "this", "nullptr", "true", "false",
+    "using", "try", "catch", "throw", "constexpr", "noexcept", "operator", "friend",
+    "std", "cout", "cin", "cerr", "endl", "string", "vector", "map", "set", "pair",
+    "printf", "scanf", "malloc", "calloc", "realloc", "free", "fopen", "fclose",
+    "fgets", "fputs", "strlen", "strcmp", "strcpy", "memset", "memcpy", "qsort",
+}
+C_KEYWORDS_LOWER = {k.lower() for k in C_KEYWORDS}
+
+C_INCLUDE = re.compile(r"^\s*#\s*include\s*[<\"]([^>\"]+)[>\"]", re.M)
+C_DEFINE = re.compile(r"^\s*#\s*define\s+(\w+)", re.M)
+C_FUNC = re.compile(r"\b(?:\w[\w:<>\*&\s]*?)\s+(\w+)\s*\([^;{}]*\)\s*(?:const\s*)?\{")
+C_CLASS = re.compile(r"\b(?:class|struct)\s+(\w+)")
+C_LOOP = re.compile(r"\b(for|while)\s*\(")
+C_IF = re.compile(r"\b(if|switch)\s*\(")
+
 
 @dataclass
 class CodeProfile:
@@ -32,6 +53,7 @@ class CodeProfile:
     problem: str
     code: str
     language: str = "python"
+    family: str = "python"
     tokens: list[str] = field(default_factory=list)
     raw_tokens: list[str] = field(default_factory=list)
     fingerprints: set[int] = field(default_factory=set)
@@ -135,13 +157,62 @@ def _squeeze_newlines(tokens: list[str]) -> list[str]:
     return out
 
 
-def tokenize_generic(code: str) -> list[str]:
+def language_family(language: str) -> str:
+    """Map a Hydro language label to a comparison family."""
+    text = (language or "").strip().lower()
+    if text.startswith("py") or "python" in text:
+        return "python"
+    if "c++" in text or "cpp" in text or "g++" in text or "clang++" in text:
+        return "cpp"
+    if text in {"c", "c11", "c99", "gnu c", "gcc", "clang"} or text.startswith("c ") or text.endswith(" c"):
+        return "c"
+    return "other"
+
+
+def tokenize_generic(code: str, family: str = "other") -> list[str]:
     code = C_STYLE_COMMENT.sub(" ", code)
-    code = HASH_COMMENT.sub(" ", code)
-    code = re.sub(r'"(?:\\.|[^"\\])*"', '"S"', code)
-    code = re.sub(r"'(?:\\.|[^'\\])*'", '"S"', code)
-    code = re.sub(r"\b\d+(?:\.\d+)?\b", "0", code)
-    return re.findall(r"[A-Za-z_]\w*|[^\s\w]", code)
+    if family not in {"python"}:
+        code = HASH_COMMENT.sub(" ", code)
+    code = re.sub(r'"(?:\\.|[^"\\])*"', " STR ", code)
+    code = re.sub(r"'(?:\\.|[^'\\])*'", " CHR ", code)
+    code = re.sub(r"\b(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[fFlLuU]*)\b", " 0 ", code)
+    raw = re.findall(r"[A-Za-z_]\w*|[^\s\w]", code)
+    out: list[str] = []
+    for tok in raw:
+        if tok == "STR":
+            out.append('"S"')
+        elif tok == "CHR":
+            out.append("'C'")
+        elif re.fullmatch(r"[A-Za-z_]\w*", tok):
+            out.append(tok if tok.lower() in C_KEYWORDS_LOWER else "V")
+        else:
+            out.append(tok)
+    return out
+
+
+def c_family_features(code: str, family: str) -> dict[str, float]:
+    includes = C_INCLUDE.findall(code)
+    defines = C_DEFINE.findall(code)
+    funcs = C_FUNC.findall(code)
+    classes = C_CLASS.findall(code)
+    lines = [ln for ln in code.splitlines() if ln.strip()]
+    feats = {
+        "includes": float(len(includes)),
+        "defines": float(len(defines)),
+        "functions": float(len(funcs)),
+        "classes": float(len(classes)),
+        "loops": float(len(C_LOOP.findall(code))),
+        "conditionals": float(len(C_IF.findall(code))),
+        "pointers": float(code.count("*") + code.count("->")),
+        "malloc": float(len(re.findall(r"\b(malloc|calloc|realloc|new)\b", code))),
+        "printf": float(len(re.findall(r"\b(printf|cout|cerr|puts|fputs)\b", code))),
+        "scanf": float(len(re.findall(r"\b(scanf|cin|gets|fgets|getline)\b", code))),
+        "templates": float(len(re.findall(r"\btemplate\s*<", code))),
+        "stl": float(len(re.findall(r"\b(vector|map|set|unordered_map|unordered_set|queue|stack|deque|algorithm)\b", code))),
+        "loc": float(len(lines)),
+        "includes_text": float(sum(len(x) for x in includes)),
+    }
+    return {f"c_{k}": v for k, v in feats.items()}
 
 
 def kgram_hashes(tokens: list[str], k: int = 5) -> list[int]:
@@ -233,23 +304,30 @@ def style_features(code: str, comments: list[str]) -> dict[str, float]:
 
 
 def build_profile(rid: str, user_id: int, problem: str, code: str, language: str = "python") -> CodeProfile:
+    family = language_family(language)
+    code = str(code or "").lstrip("\ufeff")
     prof = CodeProfile(rid=rid, user_id=user_id, problem=problem, code=code,
-                       language=language, line_count=len(code.splitlines()), char_count=len(code))
-    if language.lower().startswith("py") or language == "":
+                       language=language, family=family,
+                       line_count=len(code.splitlines()), char_count=len(code))
+    if family == "python":
         tokens, raw, comments, err = tokenize_python(code)
         prof.tokens, prof.raw_tokens, prof.comments, prof.error = tokens, raw, comments, err
         prof.parse_ok = not err
     else:
-        tokens = tokenize_generic(code)
+        tokens = tokenize_generic(code, family)
         prof.tokens = tokens
         prof.raw_tokens = tokens
         prof.parse_ok = True
     prof.kgrams = set(kgram_hashes(prof.tokens, k=5))
     prof.fingerprints = winnow(kgram_hashes(prof.tokens, k=5), w=4)
-    feats, ok, err = ast_features(code)
-    prof.ast_features = feats
-    if not ok and not prof.error:
-        prof.error = err
+    if family == "python":
+        feats, ok, err = ast_features(code)
+        prof.ast_features = feats
+        if not ok and not prof.error:
+            prof.error = err
+    else:
+        prof.ast_features = c_family_features(code, family)
+        prof.parse_ok = True
     prof.style = style_features(code, prof.comments)
     return prof
 

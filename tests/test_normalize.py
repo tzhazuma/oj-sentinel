@@ -48,3 +48,35 @@ def test_ast_cosine_and_style_distance():
     assert ast_cosine(a.ast_features, b.ast_features) > 0.9
     assert ast_cosine(a.ast_features, c.ast_features) < 0.9
     assert style_distance(a.style, a.style) == 0
+
+
+def test_c_family_tokenisation_and_features():
+    c = """#include <stdio.h>
+int main(void) {
+    int n;
+    scanf("%d", &n);
+    for (int i = 0; i < n; i++) {
+        printf("%d\\n", i);
+    }
+    return 0;
+}
+"""
+    cpp = """#include <iostream>
+using namespace std;
+int main() {
+    int n;
+    cin >> n;
+    for (int i = 0; i < n; ++i) cout << i << "\\n";
+    return 0;
+}
+"""
+    a = build_profile("c1", 1, "P", c, "C")
+    b = build_profile("c2", 2, "P", cpp, "C++")
+    assert a.family == "c" and b.family == "cpp"
+    assert "scanf" in a.tokens and "printf" in a.tokens
+    assert "cin" in b.tokens and "cout" in b.tokens
+    assert a.ast_features["c_functions"] >= 1
+    assert b.ast_features["c_includes"] >= 1
+    # comments and literals are normalised away
+    assert '"S"' in a.tokens
+    assert "#include" not in " ".join(a.tokens)

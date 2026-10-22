@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The OJ Sentinel server speaks plain HTTP on a LAN/loopback address by
+     default, so cleartext must be permitted. HTTPS servers keep working with
+     normal platform trust anchors. This is a local-first client: no external
+     CDN or third-party upload endpoint is used by the app. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

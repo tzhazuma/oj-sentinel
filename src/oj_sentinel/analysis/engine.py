@@ -134,23 +134,28 @@ def run_analysis(
     profiles = build_profiles(snap, on_event=log)
     log(f"built {len(profiles)} code profiles")
 
-    by_problem: dict[str, list[CodeProfile]] = defaultdict(list)
+    # Only compare code written in the same language family; a Python file and a
+    # C++ file are not meaningful plagiarism candidates for one another.
+    by_problem: dict[tuple[str, str], list[CodeProfile]] = defaultdict(list)
     for p in profiles:
-        by_problem[p.problem].append(p)
+        by_problem[(p.problem, p.family)].append(p)
 
     pairs: list[Pair] = []
     per_problem: dict[str, dict[str, Any]] = {}
-    for idx, (pk, profs) in enumerate(sorted(by_problem.items()), 1):
-        log(f"comparing {pk} ({idx}/{len(by_problem)}, {len(profs)} profiles)")
+    for idx, ((pk, family), profs) in enumerate(sorted(by_problem.items()), 1):
+        log(f"comparing {pk}/{family} ({idx}/{len(by_problem)}, {len(profs)} profiles)")
         found = find_pairs(profs, threshold=threshold, with_evidence=with_evidence,
                            max_pairs=max_pairs)
         pairs.extend(found)
-        per_problem[pk] = {
+        entry = per_problem.setdefault(pk, {
             "submissions": sum(1 for r in snap.records if r.get("problem_key") == pk),
-            "profiles": len(profs),
-            "pairs": len(found),
-            "top_score": round(max((p.score for p in found), default=0.0), 4),
-        }
+            "profiles": 0, "pairs": 0, "top_score": 0.0, "languages": [],
+        })
+        entry["profiles"] += len(profs)
+        entry["pairs"] += len(found)
+        entry["top_score"] = max(entry["top_score"], round(max((p.score for p in found), default=0.0), 4))
+        if family not in entry["languages"]:
+            entry["languages"].append(family)
     log(f"found {len(pairs)} suspicious pairs")
 
     # annotate usernames on pairs
@@ -165,12 +170,37 @@ def run_analysis(
     # Plagiarism is only between different students; a student's own repeated
     # submissions are handled by behaviour analytics instead.
     pairs = [p for p in pairs if p.uid_a != p.uid_b and not p.same_user]
-    clusters = cluster_pairs(pairs, threshold=max(0.55, threshold))
+    # Collapse multiple submission pairs between the same two students on the
+    # same problem to the strongest one; keep a variant count for the report.
+    variant_counts: dict[tuple[str, int, int], int] = {}
+    best: dict[tuple[str, int, int], Pair] = {}
+    for p in pairs:
+        key = (p.problem, min(p.uid_a, p.uid_b), max(p.uid_a, p.uid_b))
+        variant_counts[key] = variant_counts.get(key, 0) + 1
+        cur = best.get(key)
+        if cur is None or (p.score, p.shared) > (cur.score, cur.shared):
+            best[key] = p
+    pairs = list(best.values())
+    # Clusters are for near-identical copies, not for the long transitive chains
+    # that common templates create.  Very large components are reported as
+    # "common template" noise instead of collusion groups.
+    cluster_seed = [
+        p for p in pairs
+        if p.score >= 0.92 and p.containment >= 0.90
+        and min(p.size_a, p.size_b) >= 18 and p.shared >= 10
+    ]
+    raw_clusters = cluster_pairs(cluster_seed, threshold=0.92)
+    clusters = [c for c in raw_clusters if 2 <= c["size"] <= 15]
+    common_groups = [c for c in raw_clusters if c["size"] > 15]
     anomalies: list[dict[str, Any]] = []
     try:
         from .behavior import analyze_behavior
 
-        anomalies = analyze_behavior(snap, profiles, pairs)
+        behaviour_pairs = [
+            p for p in pairs
+            if min(p.size_a, p.size_b) >= 14 and p.shared >= 6
+        ]
+        anomalies = analyze_behavior(snap, profiles, behaviour_pairs)
         log(f"behaviour: {len(anomalies)} users flagged")
     except ImportError as exc:
         log(f"behaviour module unavailable: {exc}")
@@ -180,9 +210,20 @@ def run_analysis(
     final_scores = compute_final_scores(snap)
     summary = final_score_summary(final_scores, list(snap.problems.values()))
 
+    # Rank by evidence substance, not only by ratio: a 5-line exact copy of a
+    # one-liner is weak evidence, while a 100-line structural copy is not.
+    def _rank(p: Pair) -> float:
+        substance = min(1.0, (min(p.size_a, p.size_b) / 80.0) ** 0.5)
+        return p.score * (0.35 + 0.65 * substance)
+
+    pairs.sort(key=lambda p: (-_rank(p), -p.score, p.problem, p.rid_a, p.rid_b))
     pair_dicts = [p.to_dict() for p in pairs]
     # Human-readable reason for every pair (teacher-facing).
-    for d in pair_dicts:
+    for d, p in zip(pair_dicts, pairs):
+        d["rank_score"] = round(_rank(p), 4)
+        d["variant_count"] = variant_counts.get((p.problem, min(p.uid_a, p.uid_b), max(p.uid_a, p.uid_b)), 1)
+        d["substantial"] = bool(min(p.size_a, p.size_b) >= 18 and p.shared >= 10)
+        d["evidence_lines"] = int(sum(e.get("lines", 0) for e in d.get("evidence", [])))
         reasons = []
         if d["exact"]:
             reasons.append("归一化后代码完全一致（精确复制）")
@@ -199,6 +240,7 @@ def run_analysis(
         "profiles": len(profiles),
         "pairs": len(pairs),
         "clusters": len(clusters),
+        "common_template_groups": len(common_groups),
         "anomalies": len(anomalies),
         "submissions": len(snap.records),
         "details": len(snap.submissions),
@@ -216,6 +258,7 @@ def run_analysis(
         "per_problem": per_problem,
         "pairs": pair_dicts,
         "clusters": clusters,
+        "common_template_groups": [{"size": c["size"], "members": c["members"][:30]} for c in common_groups[:10]],
         "anomalies": anomalies,
         "final_scores": final_scores,
         "final_score_summary": summary,

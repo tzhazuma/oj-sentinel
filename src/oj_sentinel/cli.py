@@ -197,6 +197,202 @@ def cmd_serve(args):
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 
+
+
+def _snapshot_root(args) -> Path:
+    from .ingest import load_snapshot
+
+    if getattr(args, "snapshot", None):
+        return Path(args.snapshot)
+    settings = Settings.load()
+    domain = args.domain or settings.domain
+    hid = args.homework
+    if not domain or not hid:
+        raise SystemExit("missing --snapshot or --homework/--domain")
+    return Path(args.data_dir or settings.data_dir) / "snapshots" / domain / hid
+
+
+def cmd_judge(args):
+    from .judge.evaluate import evaluate_rid, evaluate_and_crossvalidate
+
+    root = _snapshot_root(args)
+    if not args.rid and not args.all and args.limit is None:
+        raise SystemExit("use --rid for one submission, or --all / --limit N for batch evaluation")
+    if args.rid:
+        result = evaluate_rid(root, args.rid, checker=False if args.no_checker else None)
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        if args.output:
+            Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        return
+    # Batch mode: evaluate every fetched submission (or a filtered subset).
+    out = Path(args.output) if args.output else Path(args.data_dir or "data") / "judge_batch.json"
+    payload = evaluate_and_crossvalidate(
+        root,
+        problem_key=args.problem,
+        limit=args.limit,
+        accepted_only=args.accepted_only,
+        out=out,
+        on_event=lambda ev: print(ev.get("message", ""), file=sys.stderr, flush=True),
+        checker=False if args.no_checker else None,
+        workers=args.workers,
+    )
+    summary = payload.get("summary", {})
+    cross = payload.get("crossvalidation") or payload.get("crossvalidate") or {}
+    csv_path = Path(args.csv) if getattr(args, "csv", None) else out.with_suffix(".csv")
+    import csv as _csv
+
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="", encoding="utf-8-sig") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["rid", "problem", "uid", "username", "language", "local_status", "local_score",
+                    "oj_status", "passed", "total", "elapsed_ms", "matches_oj", "error"])
+        for row in payload.get("results", []):
+            matches = str(row.get("status", "")).strip().lower() == str(row.get("oj_status", "")).strip().lower()
+            w.writerow([row.get("rid"), row.get("problem"), row.get("uid"), row.get("username"),
+                        row.get("language"), row.get("status"), row.get("score"), row.get("oj_status"),
+                        row.get("passed"), row.get("total"), row.get("elapsed_ms"), matches, row.get("error", "")])
+    print(json.dumps({"output": str(out), "csv": str(csv_path), **summary,
+                      "agreement": cross.get("agreement"),
+                      "agreement_rate": cross.get("agreement_rate")}, ensure_ascii=False, indent=2))
+
+
+def cmd_crossvalidate(args):
+    from .judge.crossvalidate import crossvalidate, write_crossvalidation
+    from .judge.evaluate import evaluate_rid, load_records, submission_code
+
+    root = _snapshot_root(args)
+    records = load_records(root)
+    if args.problem:
+        records = [r for r in records if r.get("problem_key") == args.problem]
+    records = [r for r in records if submission_code(root, r.get("rid", ""))]
+    if args.status:
+        wanted = set(x.strip() for x in args.status.split(","))
+        records = [r for r in records if r.get("status_text") in wanted]
+    if not args.all:
+        records = records[: args.limit]
+    results = []
+    for i, rec in enumerate(records, 1):
+        try:
+            results.append(evaluate_rid(root, rec["rid"]))
+        except Exception as exc:  # noqa: BLE001
+            results.append({"rid": rec["rid"], "status": "Local Error", "error": str(exc)})
+        if i % 20 == 0:
+            print(f"evaluated {i}/{len(records)}", file=sys.stderr)
+    report = crossvalidate(root, results)
+    out = Path(args.output) if args.output else Path(args.data_dir or "data") / "crossvalidation.json"
+    write_crossvalidation(report, out)
+    summary = {k: report.get(k) for k in ("compared", "agreement", "agreement_rate", "local_totals", "oj_totals", "by_problem") if k in report}
+    print(json.dumps({"output": str(out), **summary}, ensure_ascii=False, indent=2))
+
+
+def cmd_ai(args):
+    from .ai import AgentConfig, build_agent
+    import os
+
+    provider = args.provider or os.environ.get("OJS_AI_PROVIDER", "dsh")
+    config = AgentConfig(provider=provider, model=args.model or "deepseek-v4.1-flash",
+                         timeout=args.timeout)
+    agent = build_agent(config)
+
+    if args.action in {"review", "diagnose", "tests"}:
+        root = _snapshot_root(args)
+
+    if args.action == "review":
+        from .ai import review_pair, verdict_of
+        from .judge.evaluate import load_problem
+        import json as _json
+
+        analysis_path = Path(args.data_dir or "data") / "analysis" / (args.domain or "") / (args.homework or "") / "analysis.json"
+        if not analysis_path.exists():
+            raise SystemExit(f"analysis.json not found: {analysis_path}; run `ojs analyze` first")
+        data = _json.loads(analysis_path.read_text(encoding="utf-8"))
+        pair = None
+        if args.pair_index is not None:
+            pair = data["pairs"][args.pair_index]
+        else:
+            if not (args.rid_a and args.rid_b):
+                raise SystemExit("use --pair-index or --rid-a/--rid-b")
+            pair = next((p for p in data.get("pairs", []) if {p["rid_a"], p["rid_b"]} == {args.rid_a, args.rid_b}), None)
+        if pair is None:
+            raise SystemExit("pair not found in analysis.json")
+        problem = load_problem(root, pair["problem"])
+        def _sub(rid):
+            payload = _json.loads((root / "submissions" / f"{rid}.json").read_text(encoding="utf-8"))
+            return {"rid": rid, **payload.get("summary", {}), "code": payload.get("detail", {}).get("code", "")}
+        result = review_pair(agent, problem, _sub(pair["rid_a"]), _sub(pair["rid_b"]), pair)
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, default=str))
+    elif args.action == "diagnose":
+        from .ai import diagnose_submission
+        from .judge.evaluate import evaluate_rid, find_record, load_problem, load_submission_payload
+
+        record = find_record(root, args.rid)
+        if record is None:
+            raise SystemExit("submission not found")
+        run = evaluate_rid(root, args.rid)
+        problem = load_problem(root, record["problem_key"])
+        payload = load_submission_payload(root, args.rid)
+        detail = payload.get("detail", {})
+        submission = {"rid": args.rid, **payload.get("summary", {}), "code": detail.get("code", "")}
+        result = diagnose_submission(agent, problem, submission, run)
+        print(json.dumps({"local_run": run, **result.to_dict()}, ensure_ascii=False, indent=2, default=str))
+    elif args.action == "tests":
+        from .ai import generate_tests
+        from .judge.evaluate import load_problem
+
+        problem = load_problem(root, args.problem)
+        if args.validate:
+            from .judge.generate import generate_and_validate, write_generated_tests
+
+            payload = generate_and_validate(agent, root, args.problem, n=args.n)
+            out = Path(args.output) if args.output else Path(args.data_dir or "data") / "generated" / f"{args.problem}.json"
+            write_generated_tests(payload, out)
+            summary = dict(payload.get("summary") or {})
+            print(json.dumps({"output": str(out), **summary, "error": payload.get("error")},
+                             ensure_ascii=False, indent=2))
+            if args.run_rid:
+                from .judge.runner import normalize_language, run_program
+                from .judge.evaluate import load_submission_payload, find_record
+
+                rec = find_record(root, args.run_rid) or {}
+                detail = load_submission_payload(root, args.run_rid).get("detail", {})
+                code = detail.get("code", "")
+                cases = [t for t in payload.get("tests", []) if t.get("validated") or t.get("input")]
+                lang = normalize_language(detail.get("language") or rec.get("language") or "python")
+                result = run_program(lang, code, cases)
+                print(json.dumps({"rid": args.run_rid, "status": result.status, "score": result.score,
+                                  "passed": sum(1 for c in result.cases if c.status == "AC"),
+                                  "total": len(result.cases)}, ensure_ascii=False, indent=2))
+            return
+        result = generate_tests(agent, problem, args.n)
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, default=str))
+    elif args.action in {"evaluate-project", "evaluate-game"}:
+        from .ai import evaluate_game_project, evaluate_project
+        import json as _json
+
+        assignment = Path(args.assignment).read_text(encoding="utf-8") if args.assignment and Path(args.assignment).exists() else (args.assignment or "")
+        rubric = Path(args.rubric).read_text(encoding="utf-8") if args.rubric and Path(args.rubric).exists() else (args.rubric or "")
+        files = []
+        for pattern in args.files or []:
+            p = Path(pattern)
+            if p.is_file():
+                files.append({"name": p.name, "content": p.read_text(encoding="utf-8", errors="replace")})
+            elif p.is_dir():
+                for f in sorted(p.rglob("*")):
+                    if f.is_file() and f.stat().st_size < 200_000 and ".git" not in f.parts:
+                        files.append({"name": str(f.relative_to(p)), "content": f.read_text(encoding="utf-8", errors="replace")})
+        run_evidence = _json.loads(Path(args.run_evidence).read_text(encoding="utf-8")) if args.run_evidence else None
+        logs = Path(args.logs).read_text(encoding="utf-8", errors="replace") if args.logs else None
+        screenshots = [{"name": s, "caption": s} for s in (args.screenshots or [])]
+        if args.action == "evaluate-game":
+            result = evaluate_game_project(agent, assignment, files, rubric, run_evidence,
+                                           screenshots=screenshots, logs=logs)
+        else:
+            result = evaluate_project(agent, assignment, files, rubric, run_evidence)
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, default=str))
+    else:
+        raise SystemExit(f"unknown ai action: {args.action}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ojs", description="OJ Sentinel — Hydro OJ plagiarism & AI judging toolkit")
     sub = p.add_subparsers(dest="command", required=True)
@@ -281,6 +477,60 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--data-dir")
     sp.add_argument("--csv")
     sp.set_defaults(func=cmd_final)
+
+    sp = sub.add_parser("judge", help="run one submission locally against OJ testdata")
+    sp.add_argument("--snapshot")
+    sp.add_argument("--homework")
+    sp.add_argument("--domain")
+    sp.add_argument("--data-dir")
+    sp.add_argument("--rid", help="one submission id; omit for batch mode")
+    sp.add_argument("--all", action="store_true", help="batch-evaluate every fetched submission")
+    sp.add_argument("--limit", type=int, help="max submissions in batch mode")
+    sp.add_argument("--problem", help="only this problem (batch mode)")
+    sp.add_argument("--accepted-only", action="store_true")
+    sp.add_argument("--no-checker", action="store_true")
+    sp.add_argument("--output", help="JSON output path")
+    sp.add_argument("--csv", help="CSV output path (batch mode)")
+    sp.add_argument("--workers", type=int, default=1, help="parallel submissions in batch mode")
+    sp.set_defaults(func=cmd_judge)
+
+    sp = sub.add_parser("crossvalidate", help="local verdict vs OJ verdict matrix")
+    sp.add_argument("--snapshot")
+    sp.add_argument("--homework")
+    sp.add_argument("--domain")
+    sp.add_argument("--data-dir")
+    sp.add_argument("--problem")
+    sp.add_argument("--status", help="comma separated OJ statuses to include")
+    sp.add_argument("--limit", type=int, default=100)
+    sp.add_argument("--all", action="store_true")
+    sp.add_argument("--output")
+    sp.set_defaults(func=cmd_crossvalidate)
+
+    sp = sub.add_parser("ai", help="AI review / diagnose / test generation / project grading")
+    sp.add_argument("action", choices=["review", "diagnose", "tests", "evaluate-project", "evaluate-game"])
+    sp.add_argument("--snapshot")
+    sp.add_argument("--homework")
+    sp.add_argument("--domain")
+    sp.add_argument("--data-dir")
+    sp.add_argument("--provider", help="dsh (default) | openai | mock | offline")
+    sp.add_argument("--model", default="deepseek-v4.1-flash")
+    sp.add_argument("--timeout", type=float, default=180.0)
+    sp.add_argument("--rid")
+    sp.add_argument("--rid-a")
+    sp.add_argument("--rid-b")
+    sp.add_argument("--pair-index", type=int)
+    sp.add_argument("--problem")
+    sp.add_argument("--n", type=int, default=10)
+    sp.add_argument("--assignment")
+    sp.add_argument("--rubric")
+    sp.add_argument("--files", action="append")
+    sp.add_argument("--validate", action="store_true", help="validate generated tests against accepted submissions")
+    sp.add_argument("--run-rid", help="run generated tests on one submission")
+    sp.add_argument("--output")
+    sp.add_argument("--run-evidence")
+    sp.add_argument("--logs")
+    sp.add_argument("--screenshots", action="append")
+    sp.set_defaults(func=cmd_ai)
 
     sp = sub.add_parser("serve", help="start the Web GUI")
     sp.add_argument("--host", default="127.0.0.1")

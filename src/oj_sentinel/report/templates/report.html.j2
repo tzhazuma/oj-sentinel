@@ -22,6 +22,12 @@ tr:last-child td{border-bottom:none}
 .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600}
 .p-exact{background:#4a1f1f;color:#ff8a8a}.p-high{background:#4a341f;color:#ffc46b}.p-mid{background:#233a2c;color:#8fe3b0}
 pre{background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-size:12px;max-height:340px}
+pre.code{max-height:520px;line-height:1.45;white-space:pre;tab-size:4}
+pre.code .ln{display:block}
+pre.code .ln.hl{background:#3a2d12;box-shadow:inset 3px 0 0 #ffb020}
+pre.code .no{display:inline-block;width:3.2em;color:#5c6675;text-align:right;padding-right:.7em;user-select:none}
+pre.code .tx{white-space:pre}
+.codetitle{font-size:12px;color:var(--muted);margin:10px 0 4px}
 details{margin:8px 0}summary{cursor:pointer;color:var(--accent)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:760px){.grid2{grid-template-columns:1fr}}
 .muted{color:var(--muted)}.small{font-size:12px}
@@ -72,12 +78,28 @@ footer{margin-top:50px;color:var(--muted);font-size:12px}
 <span class="pill {% if p.exact %}p-exact{% elif p.score>=0.75 %}p-high{% else %}p-mid{% endif %}">{% if p.exact %}完全一致{% elif p.score>=0.75 %}高度疑似{% else %}可疑{% endif %}</span></td>
 <td class="small">containment {{ '%.2f'|format(p.containment) }}<br>Jaccard {{ '%.2f'|format(p.jaccard) }}<br>AST {{ '%.2f'|format(p.ast_cosine) }}<br>共享指纹 {{ p.shared }}</td>
 <td class="small">{% for r in p.reasons %}{{ r }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
-<td>{% if p.evidence %}<details><summary>{{ p.evidence|length }} 段匹配</summary>
+<td>{% if redact %}<span class="muted small">已脱敏（代码与片段移除）</span>{% elif p.evidence %}<details><summary>{{ p.evidence|length }} 段匹配</summary>
 {% for e in p.evidence %}<div class="small muted">A {{ e.a_start }}–{{ e.a_end }} / B {{ e.b_start }}–{{ e.b_end }}（{{ e.lines }} 行）</div><pre>{{ e.snippet }}</pre>{% endfor %}
 </details>{% else %}<span class="muted small">—</span>{% endif %}</td>
 </tr>
 {% endfor %}
 </tbody></table>
+
+{% if not redact %}{% for p in pairs %}
+<details class="pair-code">
+  <summary>对照原始代码：{{ p.display_a or p.username_a }}（A） ↔ {{ p.display_b or p.username_b }}（B） · {{ p.problem }} · 相似度 {{ (p.score*100)|round(1) }}% · 相似行已高亮</summary>
+  <div class="grid2">
+    <div>
+      <div class="codetitle">A · {{ p.username_a }} · {{ p.rid_a }} · {{ p.language_a }} · 高亮行 = 相似位置</div>
+      <pre class="code">{% for ln in p.code_a %}<span class="ln{% if ln.hl %} hl{% endif %}"><span class="no">{{ ln.n }}</span><span class="tx">{{ ln.text }}</span></span>{% endfor %}</pre>
+    </div>
+    <div>
+      <div class="codetitle">B · {{ p.username_b }} · {{ p.rid_b }} · {{ p.language_b }} · 高亮行 = 相似位置</div>
+      <pre class="code">{% for ln in p.code_b %}<span class="ln{% if ln.hl %} hl{% endif %}"><span class="no">{{ ln.n }}</span><span class="tx">{{ ln.text }}</span></span>{% endfor %}</pre>
+    </div>
+  </div>
+</details>
+{% endfor %}{% endif %}
 {% else %}<p class="muted">未发现超过阈值的可疑代码对。</p>{% endif %}
 
 {% if clusters %}
