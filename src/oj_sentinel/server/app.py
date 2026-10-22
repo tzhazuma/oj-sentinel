@@ -1092,6 +1092,7 @@ class JudgeBatchRequest(BaseModel):
     all: bool = False
     accepted_only: bool = False
     language: str = ""
+    workers: int = 1
 
 
 class ProjectFile(BaseModel):
@@ -2321,6 +2322,7 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
         limit = None if all_flag else max(1, min(10000, int(_number(payload.limit, 50))))
         accepted_only = bool(payload.accepted_only)
         language = (payload.language or "").strip() or None
+        workers = max(1, min(8, int(_number(payload.workers, 1))))
         out_dir = context.analysis_dir(domain, hid)
         out_dir.mkdir(parents=True, exist_ok=True)
         json_path = out_dir / "judge_batch.json"
@@ -2354,7 +2356,8 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                 job,
                 f"开始批量评测：{domain}/{hid} · {scope} · "
                 f"{'全部' if all_flag else f'前 {limit} 条'}"
-                + (" · 仅 OJ 通过" if accepted_only else ""),
+                + (" · 仅 OJ 通过" if accepted_only else "")
+                + f" · workers={workers}（评测引擎按顺序执行，参数保留给并行后端）",
             )
             result = helper(
                 root,
@@ -2411,6 +2414,8 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                 "agreement": agreement,
                 "disagreement": compared - agreement,
                 "errors": int(summary.get("errors") or 0),
+                "domain": domain,
+                "hid": hid,
                 "output_path": str(json_path),
                 "output_url": f"/api/report/{domain}/{hid}/judge_batch.json",
                 "csv_path": str(csv_path),
@@ -2420,6 +2425,7 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                 "limit": limit,
                 "accepted_only": accepted_only,
                 "language": language or "",
+                "workers": workers,
                 "rows": rows,
                 "generated_at": _iso(),
             }

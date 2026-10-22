@@ -73,6 +73,14 @@ ojs serve
 | `ojs serve` | 启动 Web GUI |
 | `ojs desktop` | 启动桌面壳 |
 
+## 文档
+
+- [方法与阈值](docs/METHOD.md)（查重分数、理由、异常信号、局限）
+- [C/C++ 课程支持](docs/C_CPP.md)
+- [隐私与数据处理](docs/PRIVACY.md)
+- [构建与安装包](docs/BUILD.md) · [Android](docs/ANDROID.md) · [AI/DSH 配置](docs/ai-setup.md)
+- [开源查重工具与 AI 代码检测调研](docs/research/landscape.md)
+
 ## 架构
 
 ```

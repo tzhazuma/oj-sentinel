@@ -12,7 +12,7 @@
   const enc = (value) => encodeURIComponent(String(value ?? ''));
   const toArray = (value) => (Array.isArray(value) ? value : []);
 
-  const JOB_LABELS = { acquire: '采集', analyze: '分析' };
+  const JOB_LABELS = { acquire: '采集', analyze: '分析', judge_batch: '批量评测' };
   const JOB_STATUS = {
     queued: '排队中', running: '运行中', succeeded: '已完成', failed: '失败', cancelled: '已取消',
   };
@@ -52,6 +52,10 @@
     projectFiles: [],
     projectResult: null,
     judgeResult: null,
+    batchJob: null,
+    batchResult: null,
+    batchJobId: null,
+    batchRendered: '',
     theme: 'light',
   };
 
@@ -146,9 +150,9 @@
       else if (/\.zip$/i.test(filename)) return { key: 'other', label: 'ZIP' };
       else if (/\.(md|txt)$/i.test(filename)) return { key: 'other', label: '文本' };
     }
-    if (/python|^py\d*$/.test(lower)) return { key: 'python', label: raw || 'Python' };
-    if (/c\+\+|cpp|cxx|g\+\+/.test(lower)) return { key: 'cpp', label: raw || 'C++' };
-    if (lower === 'c' || /^c\d+$/.test(lower)) return { key: 'c', label: raw || 'C' };
+    if (/python|^py\d*$/.test(lower)) return { key: 'python', label: 'Python' };
+    if (/c\+\+|cpp|cxx|g\+\+/.test(lower)) return { key: 'cpp', label: 'C++' };
+    if (lower === 'c' || /^c\d+$/.test(lower)) return { key: 'c', label: 'C' };
     if (!raw) return { key: 'other', label: '未知语言' };
     return { key: 'other', label: raw };
   }
@@ -322,7 +326,12 @@
     }
     if (tab === 'final' || tab === 'judge') {
       await loadFinals(force);
-      if (tab === 'judge') renderRidOptions();
+      if (tab === 'judge') {
+        renderRidOptions();
+        renderBatchProblemOptions();
+        await loadJobs();
+        renderBatchJob();
+      }
       return;
     }
     if (tab === 'project') {
@@ -425,6 +434,11 @@
     $('#final-source').textContent = '加载中…';
     $('#final-source').className = 'badge muted';
     $('#judge-rid-options').innerHTML = '';
+    state.batchJobId = '';
+    state.batchResult = null;
+    state.batchRendered = '';
+    $('#batch-progress-wrap')?.classList.add('hidden');
+    $('#batch-result')?.classList.add('hidden');
     updateContext();
   }
 
@@ -640,6 +654,21 @@
     }
     renderReports();
     renderPairProblemOptions();
+    renderBatchProblemOptions();
+  }
+
+  function renderBatchProblemOptions() {
+    const select = $('#batch-problem');
+    if (!select) return;
+    const previous = select.value;
+    const keys = new Set();
+    const snapshot = currentSnapshot();
+    if (snapshot) toArray(snapshot.problem_keys).forEach((key) => keys.add(String(key)));
+    Object.keys(state.analysis?.per_problem || {}).forEach((key) => keys.add(String(key)));
+    const sorted = Array.from(keys).sort();
+    select.innerHTML = '<option value="">全部题目</option>' +
+      sorted.map((key) => `<option value="${esc(key)}">${esc(key)}</option>`).join('');
+    if (previous && sorted.includes(previous)) select.value = previous;
   }
 
   function renderPairProblemOptions() {
@@ -1137,6 +1166,7 @@
     } else {
       renderJobs();
     }
+    renderBatchJob();
     if (finished) {
       toast('后台任务已完成，正在刷新本地数据…', 'success');
       refreshAfterJob().catch((error) => toast(errorMessage(error), 'error'));
@@ -1985,6 +2015,7 @@
     }
   }
 
+
   /* ---------------------------------------------------------------- judge */
   async function runJudge(event) {
     event.preventDefault();
@@ -2094,6 +2125,209 @@
     actions.appendChild(sourceButton);
     container.appendChild(actions);
     container.appendChild(el('p', 'hint', '本地评测只读快照测试数据；OJ 侧状态不会被修改。'));
+  }
+
+  /* ------------------------------------------------------------ batch judge */
+  function currentBatchJob() {
+    const jobs = state.jobs.filter((job) => job.kind === 'judge_batch');
+    if (!jobs.length) return null;
+    if (state.batchJobId) {
+      const explicit = jobs.find((job) => job.id === state.batchJobId);
+      if (explicit) return explicit;
+    }
+    const snapshot = currentSnapshot();
+    if (snapshot) {
+      const matching = jobs.find((job) =>
+        job.result && job.result.domain === snapshot.domain && job.result.hid === snapshot.hid);
+      if (matching) return matching;
+    }
+    return jobs[0];
+  }
+
+  function setBatchButtonsDisabled(disabled) {
+    for (const id of ['#btn-batch-problem', '#btn-batch-all', '#btn-batch-limit']) {
+      const button = $(id);
+      if (button) button.disabled = disabled;
+    }
+  }
+
+  function renderBatchJob() {
+    const wrap = $('#batch-progress-wrap');
+    const resultBox = $('#batch-result');
+    const badge = $('#batch-status-badge');
+    if (!wrap || !resultBox || !badge) return;
+    const job = currentBatchJob();
+    if (!job) {
+      wrap.classList.add('hidden');
+      resultBox.classList.add('hidden');
+      badge.textContent = '尚未运行';
+      badge.className = 'badge muted';
+      setBatchButtonsDisabled(false);
+      return;
+    }
+    state.batchJob = job;
+    wrap.classList.remove('hidden');
+    const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
+    const bar = $('#batch-progress-bar');
+    if (bar) bar.style.width = `${progress}%`;
+    $('#batch-progress-label').textContent = `${JOB_STATUS[job.status] || job.status} · ${progress}%`;
+    $('#batch-job-meta').textContent = job.message || '';
+    const log = $('#batch-log');
+    if (log) {
+      const lines = toArray(job.log);
+      log.textContent = lines.length ? lines.join('\n') : '等待日志…';
+      log.scrollTop = log.scrollHeight;
+    }
+    badge.textContent = JOB_STATUS[job.status] || job.status;
+    badge.className = `badge ${job.status === 'succeeded' ? 'ok' : job.status === 'failed' ? 'danger' : ['queued', 'running'].includes(job.status) ? 'warn' : 'muted'}`;
+    setBatchButtonsDisabled(['queued', 'running'].includes(job.status));
+    if (job.status === 'succeeded' && job.result) {
+      const snapshot = currentSnapshot();
+      if (snapshot && job.result.domain && (job.result.domain !== snapshot.domain || job.result.hid !== snapshot.hid)) {
+        resultBox.classList.add('hidden');
+        return;
+      }
+      const marker = `${job.id}:${job.finished_at || ''}`;
+      if (state.batchRendered !== marker) {
+        state.batchRendered = marker;
+        renderBatchResult(job.result);
+      }
+    } else if (job.status === 'failed') {
+      state.batchRendered = '';
+      resultBox.classList.remove('hidden');
+      $('#batch-summary').innerHTML = '';
+      $('#batch-rows').innerHTML = emptyRow(10, job.error || '批量评测失败');
+      $('#batch-result-meta').textContent = '';
+      $('#batch-json-link').classList.add('hidden');
+      $('#batch-csv-link').classList.add('hidden');
+      $('#batch-output-path').textContent = '';
+    } else {
+      resultBox.classList.add('hidden');
+    }
+  }
+
+  function renderBatchResult(result) {
+    state.batchResult = result;
+    const box = $('#batch-result');
+    if (!box || !result) return;
+    box.classList.remove('hidden');
+    const tiles = [
+      ['评测提交', fmtNumber(result.evaluated)],
+      ['本地通过', fmtNumber(result.local_accepted)],
+      ['OJ 通过', fmtNumber(result.oj_accepted)],
+      ['一致率', fmtPercent(result.agreement_rate)],
+      ['不一致', fmtNumber(result.disagreement)],
+      ['错误', fmtNumber(result.errors)],
+    ];
+    $('#batch-summary').innerHTML = tiles.map(([label, value]) => `
+      <div class="stat-tile batch-summary-tile">
+        <div class="num">${esc(value)}</div><div class="label">${esc(label)}</div>
+      </div>`).join('');
+    const scope = result.problem ? `题目 ${result.problem}` : '全部题目';
+    const mode = result.all ? '全部提交' : `前 ${fmtNumber(result.limit)} 条`;
+    const compared = result.compared ? ` · 与 OJ 可比较 ${fmtNumber(result.compared)} 条` : '';
+    $('#batch-result-meta').textContent = `${scope} · ${mode} · workers=${fmtNumber(result.workers || 1)}${compared} · 生成于 ${fmtDate(result.generated_at)}`;
+    const jsonLink = $('#batch-json-link');
+    const csvLink = $('#batch-csv-link');
+    if (jsonLink) {
+      jsonLink.href = result.output_url || '#';
+      jsonLink.classList.toggle('hidden', !result.output_url);
+    }
+    if (csvLink) {
+      csvLink.href = result.csv_url || '#';
+      csvLink.classList.toggle('hidden', !result.csv_url);
+    }
+    $('#batch-output-path').textContent = result.output_path ? `输出：${result.output_path}` : '';
+    renderBatchRows();
+  }
+
+  function renderBatchRows() {
+    const body = $('#batch-rows');
+    if (!body) return;
+    const result = state.batchResult;
+    if (!result) {
+      body.innerHTML = emptyRow(10, '暂无批量评测结果。');
+      return;
+    }
+    const mismatchOnly = Boolean($('#batch-mismatch')?.checked);
+    const allRows = toArray(result.rows);
+    const rows = allRows.filter((row) => !mismatchOnly || !row.matched);
+    const cap = 2000;
+    const shown = rows.slice(0, cap);
+    if (!shown.length) {
+      body.innerHTML = emptyRow(10, mismatchOnly ? '没有不一致的记录。' : '暂无批量评测结果。');
+      return;
+    }
+    body.innerHTML = shown.map((row) => {
+      const local = row.local_status || '—';
+      const oj = row.oj_status || '—';
+      const matched = Boolean(row.matched);
+      const lang = row.language || '';
+      return `<tr class="${matched ? '' : 'batch-mismatch'}">
+        <td><button type="button" class="badge tiny info" data-batch-rid="${esc(row.rid)}" title="查看提交详情">${esc(row.rid)}</button></td>
+        <td>${esc(row.problem || '')}</td>
+        <td><div class="person"><strong>${esc(row.username || `UID ${row.uid || ''}`)}</strong><span>uid ${esc(row.uid ?? '')}</span></div></td>
+        <td>${languageBadge(lang)}</td>
+        <td>${statusBadge(local)}</td>
+        <td>${statusBadge(oj)}</td>
+        <td>${matched ? '<span class="badge ok tiny">一致</span>' : '<span class="badge warn tiny">不一致</span>'}</td>
+        <td>${esc(row.score ?? 0)}</td>
+        <td>${fmtNumber(row.passed)} / ${fmtNumber(row.total)}</td>
+        <td>${fmtNumber(row.elapsed_ms)} ms</td>
+      </tr>`;
+    }).join('');
+    if (rows.length > cap) {
+      body.insertAdjacentHTML('beforeend', emptyRow(10, `仅显示前 ${cap} 行（共 ${rows.length} 行）；完整结果请下载 CSV。`));
+    }
+    body.onclick = (event) => {
+      const button = event.target.closest('button[data-batch-rid]');
+      if (!button) return;
+      openSubmissionDrawer(button.dataset.batchRid, currentSnapshot());
+    };
+  }
+
+  async function doBatchJudge(mode) {
+    const snapshot = currentSnapshot();
+    if (!snapshot) {
+      toast('请先选择本地快照。', 'warn');
+      return;
+    }
+    const problem = mode === 'all' ? '' : ($('#batch-problem')?.value || '');
+    if (mode === 'problem' && !problem) {
+      toast('请先在“题目”下拉框里选择题目。', 'warn');
+      return;
+    }
+    const body = {
+      domain: snapshot.domain,
+      hid: snapshot.hid,
+      problem,
+      all: mode !== 'limit',
+      accepted_only: Boolean($('#batch-accepted-only')?.checked),
+      language: $('#batch-language')?.value || '',
+      workers: Number($('#batch-workers')?.value) || 1,
+    };
+    if (mode === 'limit') {
+      body.limit = Math.max(1, Number($('#batch-limit')?.value) || 50);
+    }
+    setBatchButtonsDisabled(true);
+    try {
+      const job = await api('/api/judge/batch', { method: 'POST', body });
+      state.batchJobId = job.id;
+      state.batchRendered = '';
+      upsertJob(job);
+      renderBatchJob();
+      toast('批量评测任务已开始，可继续浏览其他页面；进度会在评测页更新。', 'success');
+      pollJobs();
+      const badge = $('#batch-status-badge');
+      if (badge) {
+        badge.textContent = '排队中';
+        badge.className = 'badge warn';
+      }
+    } catch (error) {
+      setBatchButtonsDisabled(false);
+      const data = error.data && typeof error.data === 'object' ? error.data : {};
+      toast(`批量评测启动失败：${data.detail || data.error || errorMessage(error)}`, 'error', 7000);
+    }
   }
 
   /* ---------------------------------------------------------------- project */
@@ -2397,6 +2631,10 @@
     });
 
     $('#judge-form')?.addEventListener('submit', runJudge);
+    $('#btn-batch-problem')?.addEventListener('click', () => doBatchJudge('problem'));
+    $('#btn-batch-all')?.addEventListener('click', () => doBatchJudge('all'));
+    $('#btn-batch-limit')?.addEventListener('click', () => doBatchJudge('limit'));
+    $('#batch-mismatch')?.addEventListener('change', () => renderBatchRows());
     $('#btn-clear-log')?.addEventListener('click', () => {
       state.logHidden = true;
       renderJobLog();
