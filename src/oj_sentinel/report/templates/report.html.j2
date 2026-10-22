@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} · 查重报告</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#2a2f3a;--text:#e8ecf1;--muted:#9aa4b2;--accent:#5b8cff;--warn:#ffb020;--bad:#ff5c5c;--ok:#3ecf8e}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif}
+.wrap{max-width:1280px;margin:0 auto;padding:28px 20px 80px}
+h1{font-size:26px;margin:0 0 6px}h2{font-size:19px;margin:34px 0 12px;border-left:4px solid var(--accent);padding-left:10px}
+h3{font-size:15px;margin:18px 0 8px}
+.sub{color:var(--muted)}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.card .n{font-size:26px;font-weight:700}.card .l{color:var(--muted);font-size:12px}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#1d2230;color:#c7d0dd;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+tr:last-child td{border-bottom:none}
+.score{font-weight:700;color:var(--ok)}.score.mid{color:var(--warn)}.score.low{color:var(--bad)}
+.tag{display:inline-block;padding:1px 7px;border-radius:999px;font-size:12px;border:1px solid var(--line);color:var(--muted)}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600}
+.p-exact{background:#4a1f1f;color:#ff8a8a}.p-high{background:#4a341f;color:#ffc46b}.p-mid{background:#233a2c;color:#8fe3b0}
+pre{background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-size:12px;max-height:340px}
+details{margin:8px 0}summary{cursor:pointer;color:var(--accent)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:760px){.grid2{grid-template-columns:1fr}}
+.muted{color:var(--muted)}.small{font-size:12px}
+.bar{height:8px;background:#222936;border-radius:4px;overflow:hidden}.bar>i{display:block;height:100%;background:linear-gradient(90deg,#3ecf8e,#ffb020,#ff5c5c)}
+.note{background:#1a1e27;border:1px solid var(--line);border-left:3px solid var(--warn);padding:10px 12px;border-radius:6px;margin:12px 0;color:#cbd3df}
+footer{margin-top:50px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body><div class="wrap">
+<h1>{{ title }}</h1>
+<div class="sub">{{ domain }} · 作业 {{ homework_id }} · 生成于 {{ generated_at }}</div>
+
+<div class="cards">
+  <div class="card"><div class="n">{{ stats.submissions }}</div><div class="l">提交总数</div></div>
+  <div class="card"><div class="n">{{ stats.users }}</div><div class="l">学生数</div></div>
+  <div class="card"><div class="n">{{ stats.profiles }}</div><div class="l">可分析代码</div></div>
+  <div class="card"><div class="n">{{ stats.pairs }}</div><div class="l">可疑代码对</div></div>
+  <div class="card"><div class="n">{{ stats.clusters }}</div><div class="l">疑似团伙</div></div>
+  <div class="card"><div class="n">{{ stats.anomalies }}</div><div class="l">异常用户</div></div>
+</div>
+
+<div class="note">评分口径：每个学生每道题的最终得分 = <b>该题最后一次提交</b>的得分（不取历史最高分）。
+查重范围：<b>全部提交</b>，不仅是最终提交，以免遗漏早期抄袭后删除/覆盖的情况。查重只在不同学生之间配对；同一学生的多次提交不参与查重，仅用于异常行为分析。</div>
+
+<h2>一、最终成绩（按最后提交）</h2>
+<table>
+<thead><tr><th>#</th><th>学生</th><th>账号</th>{% for p in problems %}<th>{{ p.key }}<br><span class="small muted">{{ p.title }} / {{ p.points }}分</span></th>{% endfor %}<th>总分</th></tr></thead>
+<tbody>
+{% for row in final_scores %}
+<tr><td>{{ loop.index }}</td><td>{{ row.display_name or '—' }}</td><td class="muted">{{ row.username }}</td>
+{% for p in problems %}{% set c = row.problems.get(p.key) %}
+<td>{% if c and c.last_submission %}<span class="score {% if c.score < p.points %}mid{% endif %}">{{ c.score }}</span><br><span class="small muted">{{ c.status }}<br>{{ c.submit_at }}</span>{% else %}<span class="muted">未提交</span>{% endif %}</td>
+{% endfor %}
+<td class="score">{{ row.total }} / {{ row.total_points }}</td></tr>
+{% endfor %}
+</tbody></table>
+
+<h2>二、查重结果与理由</h2>
+{% if pairs %}
+<table>
+<thead><tr><th>#</th><th>题目</th><th>学生 A</th><th>学生 B</th><th>相似度</th><th>指标</th><th>判定理由</th><th>证据</th></tr></thead>
+<tbody>
+{% for p in pairs %}
+<tr>
+<td>{{ loop.index }}</td><td>{{ p.problem }}</td>
+<td>{{ p.username_a or p.uid_a }}</td><td>{{ p.username_b or p.uid_b }}</td>
+<td><div class="bar"><i style="width:{{ (p.score*100)|round(0) }}%"></i></div><b>{{ (p.score*100)|round(1) }}%</b>
+<span class="pill {% if p.exact %}p-exact{% elif p.score>=0.75 %}p-high{% else %}p-mid{% endif %}">{% if p.exact %}完全一致{% elif p.score>=0.75 %}高度疑似{% else %}可疑{% endif %}</span></td>
+<td class="small">containment {{ '%.2f'|format(p.containment) }}<br>Jaccard {{ '%.2f'|format(p.jaccard) }}<br>AST {{ '%.2f'|format(p.ast_cosine) }}<br>共享指纹 {{ p.shared }}</td>
+<td class="small">{% for r in p.reasons %}{{ r }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+<td>{% if p.evidence %}<details><summary>{{ p.evidence|length }} 段匹配</summary>
+{% for e in p.evidence %}<div class="small muted">A {{ e.a_start }}–{{ e.a_end }} / B {{ e.b_start }}–{{ e.b_end }}（{{ e.lines }} 行）</div><pre>{{ e.snippet }}</pre>{% endfor %}
+</details>{% else %}<span class="muted small">—</span>{% endif %}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">未发现超过阈值的可疑代码对。</p>{% endif %}
+
+{% if clusters %}
+<h2>三、疑似抄袭团伙</h2>
+{% for c in clusters %}
+<div class="card" style="margin:10px 0"><b>团伙 {{ loop.index }}</b> · {{ c.size }} 人
+<ul>{% for rid in c.members %}<li class="small">{{ rid }}{% if rid in names %} — {{ names[rid] }}{% endif %}</li>{% endfor %}</ul></div>
+{% endfor %}
+{% endif %}
+
+<h2>{% if clusters %}四{% else %}三{% endif %}、异常行为</h2>
+{% if anomalies %}
+<table><thead><tr><th>#</th><th>学生</th><th>异常分</th><th>类型与理由</th><th>证据提交</th></tr></thead><tbody>
+{% for a in anomalies %}
+<tr><td>{{ loop.index }}</td><td>{{ a.display_name or a.username }}<br><span class="small muted">{{ a.username }}</span></td>
+<td><b>{{ '%.0f'|format(a.score*100) }}</b></td>
+<td>{% for r in a.reasons %}<span class="tag">{{ r.code }}</span> {{ r.detail }}<br>{% endfor %}</td>
+<td class="small">{% for rid in a.evidence %}{{ rid }}<br>{% endfor %}</td></tr>
+{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">未发现高置信度异常。</p>{% endif %}
+
+<h2>{% if clusters %}五{% else %}四{% endif %}、方法与局限</h2>
+<p class="small muted">查重使用 winnowing 指纹（k=5, w=4）、token 归一化、Jaccard / containment 与 Python AST 结构余弦相似度。相似度分数是排错线索，不构成抄袭结论；请结合代码块证据、提交时间线和课堂情况人工复核。AI 复核结果（如启用）会另行标注，且不作为唯一依据。</p>
+
+<footer>OJ Sentinel · 本地生成，未上传任何学生代码 · 报告版本 {{ schema_version }}</footer>
+</div></body></html>

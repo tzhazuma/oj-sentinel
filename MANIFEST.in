@@ -1,0 +1,2 @@
+recursive-include src/oj_sentinel/report/templates *.j2
+recursive-include src/oj_sentinel/server/static *

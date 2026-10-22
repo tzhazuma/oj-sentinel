@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oj-sentinel"
+version = "0.1.0"
+description = "Hydro OJ plagiarism detection, behaviour analytics, AI test generation and local judging"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "OJ Sentinel contributors" }]
+dependencies = [
+  "requests>=2.31",
+  "lxml>=5.0",
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+desktop = ["pywebview>=5.0", "pyinstaller>=6.10"]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+ojs = "oj_sentinel.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+oj_sentinel = [
+  "report/templates/*.j2",
+  "server/static/*",
+  "server/static/**/*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

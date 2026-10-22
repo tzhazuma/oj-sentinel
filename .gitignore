@@ -1,0 +1,48 @@
+# --- secrets & private data (never commit) ---
+data/
+output/
+reports/
+.ojs/
+.env
+.env.*
+secrets/
+credentials*
+*.cookie
+cookies.txt
+hydro_session.json
+
+# --- virtualenv / python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- packaging / OS ---
+.DS_Store
+*.app/
+*.dmg
+*.pkg
+*.exe
+*.msi
+*.AppImage
+*.deb
+*.apk
+*.aab
+*.zip
+node_modules/
+android/.gradle/
+android/**/build/
+android/local.properties
+
+# --- snapshots / scratch ---
+*.log
+tmp/
+scratch/
