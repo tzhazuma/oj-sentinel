@@ -14,6 +14,10 @@ OJ Sentinel（OJ 哨兵）是一个面向课程 OJ（默认支持 Hydro v4）的
 
 > 隐私：学生姓名、账号、代码和测试数据只保存在本机 `data/`；该目录已被 `.gitignore` 排除。报告默认支持匿名化导出。
 
+![Web GUI 概览（合成演示数据）](docs/screenshots/gui-overview.jpg)
+
+![可疑对详情：完整源码 + 相似行高亮 + 理由 + 人工确认（合成演示数据）](docs/screenshots/gui-pair-drawer.jpg)
+
 ![脱敏报告截图](docs/screenshots/report-redacted.jpg)
 
 ## 验证摘要（真实作业，2026-10）
