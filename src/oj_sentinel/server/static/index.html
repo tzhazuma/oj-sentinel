@@ -356,6 +356,34 @@
               <input id="project-files" type="file" multiple>
             </label>
             <div id="project-file-list" class="file-list"><span class="muted small">尚未选择文件。</span></div>
+            <details class="ai-settings">
+              <summary>模型设置（可选，保存在本机浏览器）</summary>
+              <div class="grid-2 tight mt-12">
+                <label>Provider
+                  <select id="ai-provider">
+                    <option value="dsh">DSH（默认，本地 agent）</option>
+                    <option value="openai">OpenAI-compatible HTTP</option>
+                    <option value="mock">Mock（测试）</option>
+                    <option value="offline">Offline（禁用 AI）</option>
+                  </select>
+                </label>
+                <label>模型 <input id="ai-model" placeholder="deepseek-v4.1-flash"></label>
+              </div>
+              <label>Base URL（openai provider 用，例如 https://host/v1）
+                <input id="ai-base-url" placeholder="留空使用默认">
+              </label>
+              <div class="grid-2 tight">
+                <label>API key 环境变量 <input id="ai-api-key-env" placeholder="OPENCODE_GO_2_API_KEY"></label>
+                <label>推理强度
+                  <select id="ai-reasoning">
+                    <option value="max">max</option>
+                    <option value="high">high</option>
+                    <option value="low">low</option>
+                  </select>
+                </label>
+              </div>
+              <p class="hint small">密钥只从服务端环境变量读取，不写入浏览器/仓库；DSH 使用本机已登录的 opencode-go-2 配置。</p>
+            </details>
             <div class="form-actions">
               <button id="btn-project-evaluate" class="btn primary" type="submit">开始 AI 评测</button>
               <button id="btn-project-clear" class="btn ghost" type="reset">清空</button>

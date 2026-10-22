@@ -1827,7 +1827,7 @@
     try {
       const data = await api('/api/ai/review', {
         method: 'POST',
-        body: { domain: snapshot.domain, hid: snapshot.hid, rid_a: pair.rid_a, rid_b: pair.rid_b },
+        body: { domain: snapshot.domain, hid: snapshot.hid, rid_a: pair.rid_a, rid_b: pair.rid_b, options: aiOptions() },
       });
       renderAiResult(container, data);
     } catch (error) {
@@ -2331,6 +2331,33 @@
   }
 
   /* ---------------------------------------------------------------- project */
+  const AI_OPTION_FIELDS = [
+    ['provider', '#ai-provider'],
+    ['model', '#ai-model'],
+    ['base_url', '#ai-base-url'],
+    ['api_key_env', '#ai-api-key-env'],
+    ['reasoning_effort', '#ai-reasoning'],
+  ];
+
+  function loadAiOptions() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('ojs.ai') || '{}'); } catch (_) { saved = {}; }
+    for (const [key, selector] of AI_OPTION_FIELDS) {
+      const node = $(selector);
+      if (node && saved[key]) node.value = saved[key];
+    }
+  }
+
+  function aiOptions() {
+    const options = {};
+    for (const [key, selector] of AI_OPTION_FIELDS) {
+      const value = $(selector)?.value?.trim();
+      if (value) options[key] = value;
+    }
+    try { localStorage.setItem('ojs.ai', JSON.stringify(options)); } catch (_) { /* private mode */ }
+    return options;
+  }
+
   const BINARY_EXTENSIONS = /\.(zip|7z|rar|png|jpe?g|gif|webp|bmp|pdf|jar|exe|dll|so|dylib|class|pyc|woff2?|ttf|mp3|mp4|mov|avi)$/i;
 
   function fileToBase64(file) {
@@ -2439,6 +2466,7 @@
         description,
         rubric,
         files,
+        options: aiOptions(),
       };
       const data = await api('/api/ai/evaluate-project', { method: 'POST', body: payload });
       state.projectResult = { data, title, student };
@@ -2617,6 +2645,10 @@
     $('#btn-anomalies-refresh')?.addEventListener('click', () => loadAnomalies(true).catch((error) => toast(errorMessage(error), 'error')));
     $('#anomalies-min-score')?.addEventListener('change', () => loadAnomalies(true).catch((error) => toast(errorMessage(error), 'error')));
 
+    for (const [, selector] of AI_OPTION_FIELDS) {
+      $(selector)?.addEventListener('change', () => aiOptions());
+      $(selector)?.addEventListener('input', () => aiOptions());
+    }
     $('#project-files')?.addEventListener('change', (event) => {
       const selected = Array.from(event.target.files || []);
       state.projectFiles = selected;
@@ -2677,6 +2709,7 @@
     await ensureTabData(state.tab, false).catch((error) => toast(errorMessage(error), 'error'));
     window.setInterval(pollJobs, 2500);
     renderProjectFileList();
+    loadAiOptions();
   }
 
   document.addEventListener('DOMContentLoaded', () => {
