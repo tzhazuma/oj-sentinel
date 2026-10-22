@@ -55,13 +55,11 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install Linux window/runtime libraries
+      - name: Install Linux packaging tools
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-0 gir1.2-webkit2-4.1 python3-gi \
-            libgtk-3-0 file desktop-file-utils dpkg
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends file libfuse2 dpkg desktop-file-utils
       - name: Install desktop dependencies
         run: |
           python -m pip install --upgrade pip
