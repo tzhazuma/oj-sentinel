@@ -1,56 +1,82 @@
-# OJ Sentinel v0.1.0
+# OJ Sentinel v0.1.1
 
-Hydro OJ 作业数据采集 · 跨学生代码查重 · 异常行为分析 · Python/C/C++ 本地评测 · DSH AI 复核 / 测试生成 / 小游戏 rubric 评测 · 跨平台 GUI。
+修复本地评测与 OJ 不一致、DSH 后端发现、批量并发输入，并新增可选 CodeBERT 语义信号与更多 CPU 架构安装包。
 
-## 主要功能
+## 重点修复
 
-- **只读采集**：登录 Hydro 后自动发现域名下的作业、题目、测试数据、成绩单与**全部提交**；不提交、不改判、不修改任何 OJ 数据。
-- **查重**：winnowing 指纹 + token 归一化 + Python AST / C/C++ 结构特征 + 稀有指纹索引；只在**不同学生**之间配对；输出可疑度、理由、两份完整原始代码与高亮相似行，人工最终确认。
-- **成绩**：每个学生每道题的最终分 = 该题**最后一次提交**的得分；同时输出最终成绩表与 CSV。
-- **异常行为**：短时间批量提交、提交间突变、首次提交即高分、风格漂移、AI 粘贴特征、跨用户近似重复；6 类信号、可解释理由，默认最多 80 人。
-- **本地评测**：Python/C/C++ 编译运行，Hydro subtasks/checker/`test.py` 包装；单条、批量（本题全部 / 全部提交 / 前 N 条）、多 worker 并行，与 OJ verdict 交叉验证。
-- **AI（默认 DSH）**：可疑对复核、失败诊断、根据题目描述生成补充测试并用 accepted 提交校验、开放式小游戏/项目 rubric 评分（AI 分数为建议，强制人工复核）。模型可配置；默认 `opencode-go-2 / deepseek-v4.1-flash`。
-- **跨平台**：Web GUI、macOS `.app/.dmg`、Windows `.exe`、Linux AppImage/`.deb`、Android WebView APK（AI tab 可调起 dsh-android）。
+### 1. 本地评测在打包版中“完全不一致”（关键）
 
-## v0.1.0 实测（真实作业，已脱敏）
+根因：PyInstaller 打包后 `sys.executable` 指向 `OJ Sentinel` 应用本身，而不是 Python。
+评测器用 `sys.executable` 运行学生代码和 Hydro `checker.py`，实际启动的是第二个 GUI 进程，
+导致 Python 提交全部 CE/RE、带 checker 的题目全部 WA。
 
-| 项目 | 结果 |
+修复：
+- 新增 `resolve_python_interpreter()`：在冻结应用中自动查找系统 Python 3
+  （`OJS_PYTHON`/`PYTHON` 覆盖、PATH、`/usr/bin/python3`、Homebrew、Windows Python 安装目录）。
+- `run_program`、`run_python`、`checker.py` 调用全部使用真实解释器。
+- 找不到 Python 时返回明确 CE 文案，而不是静默启动 GUI。
+- 新增「测试数据 / 解释器自检」：显示每个题目的测例数、checker、wrapper、testdata 路径和实际 Python。
+- 真机验证（macOS arm64 DMG 同款打包）：HW2001 accepted `20/20`、HW2004 accepted `25/25`、
+  HW2004 WA `22/25`，`matches_oj=true`。
+
+### 2. DSH 后端找不到
+
+打包版从 Finder 启动时 PATH 很小，`dsh` 不在 PATH 中。现在：
+- 自动发现：`OJS_DSH_COMMAND`/`DSH_COMMAND`、PATH、`/usr/local/bin`、`/opt/homebrew/bin`、
+  `~/.local/bin`、DeepSeek Harness.app 内置 `runtime/cli/bin/dsh`、Windows 常见路径。
+- 设置里可选「自动发现」或「自定义路径」，并提供「检测 DSH」按钮，显示路径、版本、候选与失败原因。
+- CLI：`ojs dsh-check [--path ...]`；AI 命令支持 `--dsh-path`。
+- 在最小 PATH（`/usr/bin:/bin`）下验证：自动找到 `/usr/local/bin/dsh` 0.2.1-rc.2。
+
+### 3. 批量评测并发数
+
+- GUI 从固定 1/4/8 下拉改为 **1–32 数字输入**，并真正传给评测引擎。
+- 服务端同样限制 1–32；CLI `--workers` 不变。
+
+## 算法改进（research 结论落地）
+
+- **模板/基础代码排除**：同一题中出现频率 >6% 的指纹不计入 containment/Jaccard；
+  `distinctive_ratio`、`template_only` 写入分析结果与报告。
+- **最长连续匹配**：k-gram 索引近似 Greedy String Tiling，输出 `longest_fragment` 与
+  `token_coverage`；两阶段计算（先便宜预筛，再只对前 400 对计算长片段），保证全班规模可运行。
+- 综合分调整为 `0.40*containment + 0.20*Jaccard + 0.13*AST + 0.27*最长片段占比`；
+  模板-only 重叠降权 45%，短片段降权。
+- 报告/GUI/CSV 展示新指标与理由；仍保留双方完整源码、高亮相似行与人工确认。
+- 真实数据结果：481 组跨学生可疑对（模板排除后）、13 个近复制簇、77 条异常线索；
+  原始 v0.1.0 口径为 1,509 对/32 簇。
+
+## 可选 CodeBERT（默认关闭，模型不打包）
+
+- 新增 `[codebert]` 可选依赖（`transformers` + `torch`），**不进入桌面安装包**。
+- `ojs analyze --codebert` 或 GUI 勾选后启用；只对最强候选对计算，权重默认 0.15，
+  结果仍以 winnowing/AST 为主。
+- GUI「检测模型 / 下载模型到本机」：模型保存在用户数据目录 `data/codebert/<model>`，
+  不写入安装包；首次下载需要网络，下载后可离线使用。
+- 发布包构建时排除 `torch`/`transformers`/`tokenizers`/`huggingface_hub` 与模型权重；
+  CI 用 `packaging/check_no_model.py` 检查。
+- 需要更快/更省资源时不要启用；普通查重无需任何模型。
+
+## 多架构安装包
+
+| 平台 | 产物 |
 | --- | --- |
-| 采集 | 4,767 条提交 / 340 名学生 / 4 道题 / 4,752 份可分析代码 |
-| 查重 | 1,509 组跨学生可疑对（同一对学生保留最强证据）、32 个近复制簇；Top pair 131 行归一化后完全一致，52 对提交互相印证 |
-| 异常 | 80 名高置信度线索（6 类信号，班级规模校准） |
-| 本地评测 | 120 条分层抽样提交与 OJ verdict **120/120 一致**（含 Hydro checker） |
-| AI | DSH 真实跑通：可疑对复核、失败诊断、AI 测试生成 3/3 通过 5 份 accepted 校验、贪吃蛇小游戏 rubric 评测 85/100（needs_human_review） |
-| 桌面 | macOS app/dmg、Windows exe、Linux AppImage/deb 均通过 `/api/health` + `/` 冒烟；macOS app 可启动 |
-| Android | APK 安装并启动于 API 36 模拟器与真机 PA2573（Android 16），连上 Mac 服务并加载 Web GUI |
+| macOS arm64 | `OJ-Sentinel-0.1.1-macos-arm64.dmg` / `.zip` |
+| macOS x86_64 | `OJ-Sentinel-0.1.1-macos-x86_64.dmg` / `.zip` |
+| Windows amd64 | `OJ-Sentinel-0.1.1-windows-amd64.exe` / `.zip` |
+| Windows arm64 | `OJ-Sentinel-0.1.1-windows-arm64.exe` / `.zip` |
+| Linux x86_64 | `OJ-Sentinel-0.1.1-linux-x86_64.AppImage` / `oj-sentinel_0.1.1_amd64.deb` |
+| Linux arm64 | `OJ-Sentinel-0.1.1-linux-arm64.AppImage` / `oj-sentinel_0.1.1_arm64.deb` |
+| Android | `OJ-Sentinel-0.1.1-android-debug.apk` |
 
-## 安装包
+未签名构建：macOS/Windows 首次启动会有 Gatekeeper/SmartScreen 提示；Android 为 debug 签名。
+Linux AppImage 窗口模式需要 WebKitGTK（无窗口服务器模式不需要）。
 
-| 平台 | 文件 |
-| --- | --- |
-| macOS arm64 | `OJ-Sentinel-0.1.0-macos-arm64.dmg` / `.zip`（ad-hoc 签名，未 notarize） |
-| Windows x64 | `OJ-Sentinel-0.1.0-windows-amd64.zip`（内含 `OJ Sentinel.exe`，未签名） |
-| Linux x64 | `OJ-Sentinel-0.1.0-linux-x86_64.AppImage` / `oj-sentinel_0.1.0_amd64.deb` |
-| Android | `OJ-Sentinel-0.1.0-android-debug.apk`（debug 签名，minSdk 26 / target 35） |
-
-桌面端启动后会自动打开本机 Web GUI；Android 是瘦客户端，需要先在同一局域网电脑上运行
-`ojs serve` 或桌面应用，然后在 App 设置服务器地址。
-
-## 安全与隐私
-
-- 学生数据、代码、测试数据、报告与 SQLite 只保存在本机 `data/`，不进入仓库。
-- OJ 密码只用于 `POST /login`；Web GUI 会话仅保存在进程内存（HttpOnly cookie），CLI 从 `OJ_PASSWORD` / stdin 读取。
-- 查重完全本地；AI 仅在你显式点击复核/评测时发送必要片段，可切换到本地/自建 OpenAI-compatible 端点。
-- 仓库经过 `scripts/privacy_scan.py` 检查；发布物不含真实账号、课程域名、学生姓名或代码。
-- AI 评测分数是建议，不构成学术不端结论；教师必须人工复核。
-
-## 快速开始
+## 升级
 
 ```bash
-python3.12 -m venv .venv && . .venv/bin/activate
-pip install -e ".[desktop,dev]"
+git pull
+pip install -e ".[dev,desktop]"
 pytest -q
-ojs serve                # 浏览器打开 http://127.0.0.1:8765
 ```
 
-详细说明见仓库 `README.md`、`docs/METHOD.md`、`docs/C_CPP.md`、`docs/BUILD.md`、`docs/ANDROID.md`、`docs/ai-setup.md`。
+已有 `data/` 快照可直接复用；重新运行 `ojs analyze` 以应用新算法，重新生成报告。

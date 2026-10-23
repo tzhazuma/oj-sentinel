@@ -50,7 +50,12 @@ from ..config import default_data_dir
 from ..ingest import Snapshot, load_snapshot
 from ..ingest import stats as snapshot_stats
 
-VERSION = "0.1.0"
+try:  # keep /api/health in sync with the package/build version
+    from ..desktop import package_version as _package_version
+
+    VERSION = _package_version()
+except Exception:  # pragma: no cover - minimal source checkout
+    VERSION = "0.1.1"
 COOKIE_NAME = "ojs_session"
 SESSION_TTL = 8 * 60 * 60  # 8 hours, absolute
 LOG_CAP = 500
@@ -1062,6 +1067,10 @@ class AnalyzeRequest(BaseModel):
     threshold: float = 0.6
     max_pairs: int = 20000
     with_evidence: bool = True
+    codebert: bool = False
+    codebert_model: str = "microsoft/codebert-base"
+    codebert_weight: float = 0.15
+    codebert_max_pairs: int = 300
 
 
 class AIReviewRequest(BaseModel):
@@ -1073,6 +1082,17 @@ class AIReviewRequest(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class CodeBertModelRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    model: str = "microsoft/codebert-base"
+
+
+class DshCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    path: str = ""
+    timeout: float = 12.0
+
+
 class JudgeRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
     domain: str
@@ -1081,6 +1101,13 @@ class JudgeRequest(BaseModel):
     time_limit_ms: int = 5000
     memory_limit_mb: int = 256
     language: str = ""
+
+
+class JudgeDoctorRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    domain: str = ""
+    hid: str = ""
+    problem: str = ""
 
 
 class JudgeBatchRequest(BaseModel):
@@ -1217,7 +1244,8 @@ def _build_agent(options: dict[str, Any] | None = None) -> tuple[Any | None, str
     config = None
     if callable(config_class):
         kwargs: dict[str, Any] = {}
-        for key in ("provider", "model", "base_url", "api_key_env", "timeout", "reasoning_effort"):
+        for key in ("provider", "model", "base_url", "api_key_env", "timeout", "reasoning_effort",
+                    "dsh_command", "dsh_profile", "dsh_provider", "dsh_session", "max_tokens"):
             if options.get(key) is not None:
                 kwargs[key] = options[key]
         try:
@@ -1326,6 +1354,11 @@ def _run_analysis_inprocess(
     threshold: float,
     max_pairs: int,
     with_evidence: bool,
+    codebert: bool = False,
+    codebert_model: str = "microsoft/codebert-base",
+    codebert_weight: float = 0.15,
+    codebert_max_pairs: int = 300,
+    codebert_cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     engine, error = _import_optional("oj_sentinel.analysis.engine")
     if engine is None:
@@ -1380,6 +1413,11 @@ def _run_analysis_inprocess(
         "min_score": threshold,
         "max_pairs": max_pairs,
         "with_evidence": with_evidence,
+        "codebert": codebert,
+        "codebert_model": codebert_model,
+        "codebert_weight": codebert_weight,
+        "codebert_max_pairs": codebert_max_pairs,
+        "codebert_cache_dir": codebert_cache_dir or context.data_dir,
         "on_event": on_event,
         "progress": on_event,
         "on_progress": on_event,
@@ -1751,6 +1789,11 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                     threshold=threshold,
                     max_pairs=max_pairs,
                     with_evidence=bool(payload.with_evidence),
+                    codebert=bool(getattr(payload, "codebert", False)),
+                    codebert_model=str(getattr(payload, "codebert_model", "microsoft/codebert-base") or "microsoft/codebert-base"),
+                    codebert_weight=float(getattr(payload, "codebert_weight", 0.15) or 0.15),
+                    codebert_max_pairs=max(1, min(2000, int(getattr(payload, "codebert_max_pairs", 300) or 300))),
+                    codebert_cache_dir=context.data_dir,
                 )
             except _AnalysisSignatureError as exc:
                 jobs.add_log(job, f"分析引擎签名不兼容（{exc}），改用子进程", level="warning")
@@ -1920,7 +1963,79 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
     def get_submission(rid: str, domain: str | None = None, hid: str | None = None):
         return context.submission_payload(rid, domain, hid)
 
+    # -- optional CodeBERT model management --------------------------------
+    @app.post("/api/ai/codebert/status", tags=["ai"])
+    def codebert_status(payload: CodeBertModelRequest):
+        module, error = _import_optional("oj_sentinel.analysis.codebert")
+        check = getattr(module, "check_model", None) if module else None
+        if not callable(check):
+            return JSONResponse(status_code=501, content={"available": False, "error": error or "CodeBERT 模块未就绪"})
+        data = check(payload.model or "microsoft/codebert-base", cache_dir=context.data_dir)
+        data["available"] = True
+        return data
+
+    @app.post("/api/ai/codebert/download", tags=["ai"])
+    def codebert_download(payload: CodeBertModelRequest):
+        module, error = _import_optional("oj_sentinel.analysis.codebert")
+        download = getattr(module, "download_model", None) if module else None
+        if not callable(download):
+            return JSONResponse(status_code=501, content={"available": False, "error": error or "CodeBERT 模块未就绪"})
+        model = payload.model or "microsoft/codebert-base"
+        job = context.jobs.create("codebert_download", f"下载 CodeBERT 模型 {model}")
+
+        def runner() -> dict[str, Any]:
+            context.jobs.add_log(job, f"模型将保存到本机数据目录（不会写入安装包）：{context.data_dir}")
+            context.jobs.set_progress(job, 5)
+            status = download(model, cache_dir=context.data_dir,
+                              on_progress=lambda message: context.jobs.add_log(job, str(message)))
+            context.jobs.set_progress(job, 100)
+            if not status.get("ok") and not status.get("installed"):
+                raise RuntimeError(status.get("error") or "模型下载未完成")
+            return status
+
+        context.jobs.start(job, runner)
+        return JSONResponse(status_code=202, content=context.jobs.snapshot(job))
+
     # -- AI review / judge -------------------------------------------------
+    @app.post("/api/ai/dsh/check", tags=["ai"])
+    def dsh_check(payload: DshCheckRequest):
+        """Probe a dsh path (or auto-discover) and return a version report.
+
+        The packaged app is launched with a minimal PATH, so this endpoint is
+        the source of truth for the GUI's "auto discover / custom path" mode.
+        """
+        module, module_error = _import_optional("oj_sentinel.ai.dsh_discovery")
+        if module is None:
+            return JSONResponse(
+                status_code=501,
+                content={
+                    "available": False,
+                    "error": "dsh 检测模块尚未就绪",
+                    "detail": module_error,
+                },
+            )
+        discover = getattr(module, "discover_dsh", None)
+        if not callable(discover):
+            return JSONResponse(
+                status_code=501,
+                content={"available": False, "error": "dsh 检测模块缺少 discover_dsh"},
+            )
+        try:
+            info = discover(payload.path or None, timeout=max(2.0, min(30.0, float(payload.timeout or 12.0))))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse(
+                status_code=500,
+                content={"available": True, "found": False, "error": f"检测失败：{_short(exc)}"},
+            )
+        data = info.to_dict() if hasattr(info, "to_dict") else dict(info)
+        data["available"] = True
+        data["checked_at"] = _iso()
+        return data
+
+    @app.get("/api/ai/dsh/check", tags=["ai"])
+    def dsh_check_get(path: str = Query(""), timeout: float = Query(12.0)):
+        return dsh_check(DshCheckRequest(path=path, timeout=timeout))
+
     @app.post("/api/ai/review", tags=["ai"])
     def ai_review(payload: AIReviewRequest):
         domain = _safe_segment(payload.domain, "域名")
@@ -2291,6 +2406,59 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
             "checked_at": _iso(),
         }
 
+    @app.post("/api/judge/doctor", tags=["judge"])
+    def judge_doctor(payload: JudgeDoctorRequest):
+        """Report local testdata/case counts and the interpreter used by the judge."""
+        domain = _safe_segment(payload.domain, "域名")
+        hid = _safe_segment(payload.hid, "作业 ID")
+        root = context.snapshot_root(domain, hid)
+        module, module_error = _import_optional("oj_sentinel.judge.evaluate")
+        load_cases = getattr(module, "load_cases", None) if module else None
+        if not callable(load_cases):
+            return JSONResponse(status_code=501, content={"available": False, "error": module_error or "评测模块未就绪"})
+        runner_module, runner_error = _import_optional("oj_sentinel.judge.runner")
+        resolve_python = getattr(runner_module, "resolve_python_interpreter", None) if runner_module else None
+        interpreter = ""
+        interpreter_error = ""
+        try:
+            interpreter = str(resolve_python() or "") if callable(resolve_python) else ""
+        except Exception as exc:  # noqa: BLE001
+            interpreter_error = _short(exc)
+        records = module.load_records(root) if hasattr(module, "load_records") else []
+        keys = []
+        for record in records:
+            key = str(record.get("problem_key") or "")
+            if key and key not in keys:
+                keys.append(key)
+        if payload.problem:
+            keys = [key for key in keys if key == payload.problem]
+        problems = []
+        for key in keys:
+            try:
+                cases, meta = load_cases(root, key)
+                problems.append({
+                    "problem": key,
+                    "case_count": len(cases),
+                    "subtasks": meta.get("subtasks", []),
+                    "checker": (meta.get("checker") or {}).get("path", "") if isinstance(meta.get("checker"), dict) else "",
+                    "extra_source": bool(meta.get("extra_source")),
+                    "testdata_dir": str(meta.get("testdata_dir") or ""),
+                    "time_limit_ms": meta.get("time_limit_ms"),
+                    "memory_limit_mb": meta.get("memory_limit_mb"),
+                })
+            except Exception as exc:  # noqa: BLE001
+                problems.append({"problem": key, "error": _short(exc), "case_count": 0})
+        return {
+            "available": True,
+            "domain": domain,
+            "hid": hid,
+            "python_interpreter": interpreter,
+            "python_ok": bool(interpreter),
+            "python_error": interpreter_error,
+            "problems": problems,
+            "checked_at": _iso(),
+        }
+
     @app.post("/api/judge/batch", tags=["judge"])
     def judge_batch(payload: JudgeBatchRequest):
         """Batch local judging + OJ cross-validation in a background job.
@@ -2322,7 +2490,7 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
         limit = None if all_flag else max(1, min(10000, int(_number(payload.limit, 50))))
         accepted_only = bool(payload.accepted_only)
         language = (payload.language or "").strip() or None
-        workers = max(1, min(8, int(_number(payload.workers, 1))))
+        workers = max(1, min(32, int(_number(payload.workers, 1))))
         out_dir = context.analysis_dir(domain, hid)
         out_dir.mkdir(parents=True, exist_ok=True)
         json_path = out_dir / "judge_batch.json"
@@ -2357,7 +2525,7 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                 f"开始批量评测：{domain}/{hid} · {scope} · "
                 f"{'全部' if all_flag else f'前 {limit} 条'}"
                 + (" · 仅 OJ 通过" if accepted_only else "")
-                + f" · workers={workers}（评测引擎按顺序执行，参数保留给并行后端）",
+                + f" · workers={workers}",
             )
             result = helper(
                 root,
@@ -2367,6 +2535,7 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                 language=language,
                 out=json_path,
                 on_event=on_event,
+                workers=workers,
             )
             if not isinstance(result, dict):
                 raise RuntimeError("批量评测返回了非预期结果")

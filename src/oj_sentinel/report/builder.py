@@ -184,14 +184,16 @@ def build_reports(
     _write_csv(final_csv, headers, rows)
 
     pair_headers = ["problem", "rid_a", "rid_b", "username_a", "username_b", "uid_a", "uid_b",
-                    "score", "jaccard", "containment", "ast_cosine", "shared", "exact", "same_user",
+                    "score", "jaccard", "containment", "ast_cosine", "codebert_cosine", "longest_fragment", "token_coverage",
+                    "distinctive_ratio", "template_only", "shared", "exact", "same_user",
                     "reasons", "evidence_blocks"]
     pair_rows = []
     for p in data.get("pairs", []):
         pair_rows.append([
             p.get("problem"), p.get("rid_a"), p.get("rid_b"), p.get("username_a"), p.get("username_b"),
             p.get("uid_a"), p.get("uid_b"), p.get("score"), p.get("jaccard"), p.get("containment"),
-            p.get("ast_cosine"), p.get("shared"), p.get("exact"), p.get("same_user"),
+            p.get("ast_cosine"), p.get("codebert_cosine"), p.get("longest_fragment"), p.get("token_coverage"),
+            p.get("distinctive_ratio"), p.get("template_only"), p.get("shared"), p.get("exact"), p.get("same_user"),
             " | ".join(p.get("reasons", [])), len(p.get("evidence", [])),
         ])
     pairs_csv = target / "pairs.csv"

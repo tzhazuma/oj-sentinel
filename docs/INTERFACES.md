@@ -57,7 +57,8 @@ Written to `data/analysis/<domain>/<homework_id>/analysis.json`:
     "problem": "HW2001", "rid_a": "...", "rid_b": "...",
     "uid_a": 1, "uid_b": 2, "username_a": "...", "username_b": "...",
     "score": 0.87, "jaccard": 0.71, "containment": 0.89, "ast_cosine": 0.83,
-    "shared": 120, "size_a": 150, "size_b": 160,
+    "longest_fragment": 72, "token_coverage": 0.64, "distinctive_ratio": 0.81,
+    "template_only": false, "shared": 120, "size_a": 150, "size_b": 160,
     "same_user": false, "exact": false, "method": "winnowing+ast",
     "evidence": [{"a_start": 3, "a_end": 9, "b_start": 4, "b_end": 10,
                   "lines": 6, "snippet": "..."}]
@@ -125,6 +126,10 @@ class Agent:
 
 - `DshAgent` (default): runs `dsh --profile headless --patch <overlay> ...`
   with the configured provider/model, falls back to OpenAI-compatible HTTP.
+  `dsh` is auto-discovered (env `OJS_DSH_COMMAND`, PATH, `/usr/local/bin`,
+  `/opt/homebrew/bin`, DeepSeek Harness.app bundle) or supplied explicitly via
+  `AgentConfig.dsh_command` / Web `dsh_command` option.  Detection is exposed by
+  `POST /api/ai/dsh/check {path?,timeout?}` and `ojs dsh-check --path ...`.
 - `OpenAICompatAgent`: `POST {base_url}/chat/completions`, OpenAI JSON schema
   via response_format when supported.
 - `MockAgent`: deterministic canned JSON for tests/CI.
@@ -194,7 +199,8 @@ Auth: `POST /api/session` `{base_url, domain, username, password}` -> sets
 | GET | `/api/snapshots/{domain}/{hid}/anomalies` | anomalies |
 | GET | `/api/snapshots/{domain}/{hid}/final-scores` | per-student per-problem last-submission scores |
 | GET | `/api/submissions/{rid}?domain=&hid=` | code + detail |
-| POST | `/api/ai/review` | `{domain,hid,rid_a,rid_b}` -> AI verdict (sync/queued) |
+| POST | `/api/ai/dsh/check` | `{path?,timeout?}` -> `{found,selected,version,candidates,searched,error}` |
+| POST | `/api/ai/review` | `{domain,hid,rid_a,rid_b,options?}` -> AI verdict (sync/queued) |
 | POST | `/api/judge/run` | `{domain,hid,rid}` -> local verdict |
 | GET | `/api/report/{domain}/{hid}/{name}` | download generated report |
 | GET | `/` | single-page GUI |

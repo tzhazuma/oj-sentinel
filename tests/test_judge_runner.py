@@ -441,3 +441,40 @@ def test_run_program_missing_compiler_is_compile_error():
     )
     assert result.status == COMPILE_ERROR
     assert "compiler not found" in result.compile_output
+
+
+def test_resolve_python_interpreter_when_frozen(monkeypatch):
+    import oj_sentinel.judge.runner as runner
+
+    monkeypatch.setattr(runner.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runner.sys, "executable", "/Applications/OJ Sentinel.app/Contents/MacOS/OJ Sentinel")
+    monkeypatch.setattr(runner, "_PYTHON_CACHE", None)
+    found = runner.resolve_python_interpreter()
+    assert found and Path(found).exists()
+    assert "OJ Sentinel.app" not in found
+
+
+def test_run_program_python_when_frozen(monkeypatch):
+    import oj_sentinel.judge.runner as runner
+
+    monkeypatch.setattr(runner.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runner.sys, "executable", "/Applications/OJ Sentinel.app/Contents/MacOS/OJ Sentinel")
+    monkeypatch.setattr(runner, "_PYTHON_CACHE", None)
+    result = run_program("python", SUM_CODE, SUM_CASES)
+    assert result.status == ACCEPTED, result.compile_output or result.stderr
+
+
+def test_python_checker_uses_real_interpreter_when_frozen(tmp_path, monkeypatch):
+    import oj_sentinel.judge.runner as runner
+
+    checker = _write(tmp_path / "checker.py", "import sys\nsys.exit(0 if open(sys.argv[2]).read() == open(sys.argv[3]).read() else 1)\n")
+    monkeypatch.setattr(runner.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runner.sys, "executable", "/Applications/OJ Sentinel.app/Contents/MacOS/OJ Sentinel")
+    monkeypatch.setattr(runner, "_PYTHON_CACHE", None)
+    result = run_program(
+        "python",
+        SUM_CODE,
+        SUM_CASES,
+        checker={"path": str(checker), "argv_order": ["input", "answer", "output"]},
+    )
+    assert result.status == ACCEPTED, result.cases[0].message if result.cases else result.compile_output

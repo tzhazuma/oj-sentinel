@@ -25,9 +25,9 @@ BUNDLE="$DIST/OJ-Sentinel"
 APP_NAME="OJ Sentinel"
 ARCH="$(uname -m)"
 case "$ARCH" in
-  x86_64|amd64) APPIMAGE_ARCH="x86_64"; DEB_ARCH="amd64" ;;
-  aarch64|arm64) APPIMAGE_ARCH="aarch64"; DEB_ARCH="arm64" ;;
-  *) APPIMAGE_ARCH="$ARCH"; DEB_ARCH="$ARCH" ;;
+  x86_64|amd64) APPIMAGE_ARCH="x86_64"; DEB_ARCH="amd64"; ARTIFACT_ARCH="x86_64" ;;
+  aarch64|arm64) APPIMAGE_ARCH="aarch64"; DEB_ARCH="arm64"; ARTIFACT_ARCH="arm64" ;;
+  *) APPIMAGE_ARCH="$ARCH"; DEB_ARCH="$ARCH"; ARTIFACT_ARCH="$ARCH" ;;
 esac
 
 cd "$ROOT"
@@ -76,7 +76,7 @@ if [[ -f "$ROOT/packaging/icon.png" ]]; then
   cp "$ROOT/packaging/icon.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/oj-sentinel.png"
 fi
 
-APPIMAGE="$DIST/OJ-Sentinel-${VERSION}-linux-${APPIMAGE_ARCH}.AppImage"
+APPIMAGE="$DIST/OJ-Sentinel-${VERSION}-linux-${ARTIFACT_ARCH}.AppImage"
 APPIMAGETOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
 TOOL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ojs-appimage.XXXXXX")"
 trap 'rm -rf "$TOOL_DIR"' EXIT

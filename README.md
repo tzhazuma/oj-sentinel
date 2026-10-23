@@ -4,13 +4,13 @@
 
 OJ Sentinel（OJ 哨兵）是一个面向课程 OJ（默认支持 Hydro v4）的教学质控工具。教师输入 OJ 地址、域名与账号后，工具会自动发现作业、题目、测试数据和全部学生提交，随后在本地完成：
 
-- **多算法查重**：winnowing 指纹 + token n-gram + Python AST / C/C++ 结构特征 + 可选 AI 语义复核；不把学生代码上传到第三方。查重只在**不同学生**之间配对；同一学生的多次提交只进入异常行为分析。
+- **多算法查重**：winnowing 指纹 + token 归一化 + Python AST / C/C++ 结构特征 + 最长连续片段（Greedy String Tiling 近似）+ 班级模板排除 + **可选 CodeBERT 语义相似度**；不把学生代码上传到第三方。查重只在**不同学生**之间配对；同一学生的多次提交只进入异常行为分析。
 - **异常行为检测**：短时间批量提交、提交间突变、首次提交即通过、AI 生成/粘贴特征、跨用户同源代码。
 - **AI 智能分析**：默认使用 [DeepSeek Harness (dsh)](https://github.com/tzhazuma/dsh-android) 作为 agent；模型可自定义（默认 `opencode-go-2 / deepseek-v4.1-flash`）。
 - **本地评测**：读取 OJ 测试数据，支持 Python / C / C++ 编译运行；可单条、批量（按题目或全部提交）评测，并与 OJ verdict 交叉验证；AI 生成补充测试、对失败提交给出纠错建议。
 - **作品 / 小游戏 AI 评测**：对 OJ 无法自动判分的开放式作业（小游戏、项目）按 rubric 给出 AI 评分、逐项理由、证据与置信度，并强制标注“需人工复核”；教师保留最终分数决定权。
 - **成绩口径**：每个学生每道题的最终得分 = 该题**最后一次提交**的得分；查重则覆盖**全部提交**，避免遗漏。
-- **跨平台**：Web GUI、macOS/Windows/Linux 桌面应用、Android App。
+- **跨平台**：Web GUI、macOS（arm64 / x86_64）、Windows（amd64 / arm64）、Linux（x86_64 / arm64）桌面应用、Android App。
 
 > 隐私：学生姓名、账号、代码和测试数据只保存在本机 `data/`；该目录已被 `.gitignore` 排除。报告默认支持匿名化导出。
 
@@ -23,8 +23,9 @@ OJ Sentinel（OJ 哨兵）是一个面向课程 OJ（默认支持 Hydro v4）的
 ## 验证摘要（真实作业，2026-10）
 
 - 采集 4,767 条提交 / 340 名学生 / 4 道题；4752 份可分析代码。
-- 查重：1,509 组跨学生可疑对（同一对学生只保留最强证据），32 个近复制簇；Top pair 为 131 行归一化后完全一致，另有 52 对提交互相印证。
-- 行为异常：80 名高置信度线索（六类信号，已按班级规模校准）。
+- 查重（v0.1.0 原始口径）：1,509 组跨学生可疑对、32 个近复制簇；Top pair 为 131 行归一化后完全一致，另有 52 对提交互相印证。
+- 查重（v0.1.1 模板排除 + 最长片段）：481 组跨学生可疑对、13 个近复制簇；模板/基础代码不再抬高分数，Top pair 仍为 1.0。
+- 行为异常：77 名高置信度线索（六类信号，已按班级规模校准）。
 - 本地评测：120 条分层抽样提交与 OJ verdict **120/120 一致**（Python，含 Hydro checker 包装）；C/C++ 编译运行路径有测试覆盖。
 - AI：DSH（opencode-go-2 / deepseek-v4.1-flash）真实跑通可疑对复核、失败诊断、AI 测试生成（3/3 通过 5 份 accepted 参考校验）与贪吃蛇小游戏 rubric 评测（85/100，`needs_human_review=true`）。
 
@@ -47,7 +48,11 @@ ojs report --homework YOUR_HOMEWORK_ID --open
 # 本地评测：单条 / 批量（本题 / 全部提交）
 ojs judge --homework YOUR_HOMEWORK_ID --rid <rid>
 ojs judge --homework YOUR_HOMEWORK_ID --problem HW2001 --limit 100
-ojs judge --homework YOUR_HOMEWORK_ID --all --output data/judge_all.json
+ojs judge --homework YOUR_HOMEWORK_ID --all --workers 8 --output data/judge_all.json
+
+# 可选 CodeBERT 语义信号（默认关闭；模型不会打包进安装包）
+pip install -e ".[codebert]"
+ojs analyze --homework YOUR_HOMEWORK_ID --codebert
 
 # AI 复核一对可疑提交 / 失败诊断 / 小游戏作品评测
 ojs ai review --homework YOUR_HOMEWORK_ID --pair-index 0

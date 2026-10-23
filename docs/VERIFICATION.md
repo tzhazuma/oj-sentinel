@@ -79,3 +79,36 @@ ojs final --homework YOUR_HOMEWORK_ID --domain YOUR_DOMAIN --csv final_scores.cs
 - 报告 `--redact` 移除课程标识、姓名、账号、代码与相似片段；
 - 截图使用合成演示数据（Alice/Bob、DEMO_2026）；
 - 无 OJ 写操作，AI 仅在显式操作时接收必要片段。
+
+## 7. v0.1.1 修复验证（2026-10-23）
+
+### 本地评测与 OJ 不一致
+
+根因：PyInstaller 冻结后 `sys.executable` 是 `OJ Sentinel` 应用，不是 Python；学生代码和
+`checker.py` 都被应用自身启动，导致打包版本地评测全部异常。
+
+验证（打包后的 macOS arm64 `.app`，最小 PATH `/usr/bin:/bin`，`OJS_DATA_DIR` 指向真实快照）：
+
+| 提交 | OJ | 本地 | 结果 |
+| --- | --- | --- | --- |
+| HW2001 `6ad757ff…` | Accepted | Accepted 20/20 | matches_oj=true |
+| HW2004 `6ad755a3…` | Accepted | Accepted 25/25 | matches_oj=true |
+| HW2004 `6ad753f4…` | Wrong Answer | Wrong Answer 22/25 | matches_oj=true |
+
+`/api/judge/doctor` 返回真实解释器 `/usr/bin/python3`（而不是 app 二进制），并列出每题测例数：
+HW2004=25、HW2003=25、HW2002=20、HW2001=20。
+
+### DSH 自动发现
+
+最小 PATH 下 `/api/ai/dsh/check` 自动找到 `/usr/local/bin/dsh`，版本 `0.2.1-rc.2`；
+自定义无效路径返回 `found=false` 和具体错误；Web「检测 DSH」显示状态。
+
+### 算法与可选 CodeBERT
+
+- 真实数据重跑：481 组跨学生可疑对、13 个近复制簇、77 条异常；模板排除生效。
+- CodeBERT 默认关闭；发布包不包含 `torch`/`transformers`/模型权重，
+  `packaging/check_no_model.py` 检查通过；GUI 可检测/下载模型到用户数据目录。
+
+### 多架构
+
+CI 矩阵新增 macOS x86_64、Linux arm64、Windows arm64；构建后运行无模型检查与 headless 冒烟。

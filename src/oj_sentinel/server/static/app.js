@@ -1318,6 +1318,65 @@
     }
   }
 
+  async function checkCodebert() {
+    const badge = $('#codebert-status');
+    const detail = $('#codebert-detail');
+    if (!badge) return null;
+    const model = $('#analysis-codebert-model')?.value?.trim() || 'microsoft/codebert-base';
+    badge.textContent = '检测中…';
+    badge.className = 'badge muted';
+    try {
+      const data = await api('/api/ai/codebert/status', { method: 'POST', body: { model } });
+      if (!data.available) {
+        badge.textContent = '模块不可用';
+        badge.className = 'badge danger';
+        if (detail) detail.textContent = data.error || '';
+        return data;
+      }
+      const deps = data.dependencies || {};
+      const missing = Object.entries(deps).filter(([, ok]) => !ok).map(([name]) => name);
+      if (data.installed && data.dependencies_ok) {
+        badge.textContent = `已就绪 · ${data.size_mb} MB`;
+        badge.className = 'badge ok';
+      } else if (data.installed) {
+        badge.textContent = '模型已下载，缺依赖';
+        badge.className = 'badge warn';
+      } else {
+        badge.textContent = data.can_download ? '未下载' : '缺可选依赖';
+        badge.className = 'badge warn';
+      }
+      if (detail) {
+        detail.textContent = [
+          `路径：${data.path}`,
+          `文件：${data.files} 个 · ${data.size_mb} MB`,
+          `依赖：${missing.length ? '缺少 ' + missing.join(', ') : 'torch / transformers / huggingface_hub 已安装'}`,
+          data.installed ? '模型已在本机，可直接勾选 CodeBERT。' : '模型未随安装包分发；点击“下载模型到本机”或手动放置到上述路径。',
+        ].join('\n');
+      }
+      return data;
+    } catch (error) {
+      badge.textContent = '检测失败';
+      badge.className = 'badge danger';
+      if (detail) detail.textContent = errorMessage(error);
+      return null;
+    }
+  }
+
+  async function downloadCodebert() {
+    const model = $('#analysis-codebert-model')?.value?.trim() || 'microsoft/codebert-base';
+    const badge = $('#codebert-status');
+    if (badge) { badge.textContent = '下载任务创建中…'; badge.className = 'badge muted'; }
+    try {
+      const job = await api('/api/ai/codebert/download', { method: 'POST', body: { model } });
+      upsertJob(job);
+      toast('模型下载任务已开始；可在「采集」页任务日志查看进度。', 'success');
+      pollJobs();
+    } catch (error) {
+      toast(`模型下载失败：${errorMessage(error)}`, 'error', 6500);
+      if (badge) { badge.textContent = '下载失败'; badge.className = 'badge danger'; }
+    }
+  }
+
   async function doAnalyze() {
     const snapshot = currentSnapshot();
     if (!snapshot) {
@@ -1336,7 +1395,13 @@
     try {
       const job = await api('/api/analyze', {
         method: 'POST',
-        body: { domain: snapshot.domain, hid: snapshot.hid, threshold },
+        body: {
+          domain: snapshot.domain,
+          hid: snapshot.hid,
+          threshold,
+          codebert: Boolean($('#analysis-codebert')?.checked),
+          codebert_model: $('#analysis-codebert-model')?.value?.trim() || 'microsoft/codebert-base',
+        },
       });
       upsertJob(job);
       toast('分析任务已开始，进度可在「采集」页的任务日志查看。', 'success');
@@ -2304,7 +2369,7 @@
       all: mode !== 'limit',
       accepted_only: Boolean($('#batch-accepted-only')?.checked),
       language: $('#batch-language')?.value || '',
-      workers: Number($('#batch-workers')?.value) || 1,
+      workers: Math.max(1, Math.min(32, Number($('#batch-workers')?.value) || 1)),
     };
     if (mode === 'limit') {
       body.limit = Math.max(1, Number($('#batch-limit')?.value) || 50);
@@ -2346,6 +2411,8 @@
       const node = $(selector);
       if (node && saved[key]) node.value = saved[key];
     }
+    if ($('#ai-dsh-mode') && saved.dsh_mode) $('#ai-dsh-mode').value = saved.dsh_mode;
+    if ($('#ai-dsh-path') && saved.dsh_path) $('#ai-dsh-path').value = saved.dsh_path;
   }
 
   function aiOptions() {
@@ -2354,8 +2421,55 @@
       const value = $(selector)?.value?.trim();
       if (value) options[key] = value;
     }
+    const mode = $('#ai-dsh-mode')?.value || 'auto';
+    const customPath = $('#ai-dsh-path')?.value?.trim() || '';
+    options.dsh_mode = mode;
+    if (mode === 'custom' && customPath) options.dsh_command = customPath;
     try { localStorage.setItem('ojs.ai', JSON.stringify(options)); } catch (_) { /* private mode */ }
     return options;
+  }
+
+  async function checkDsh() {
+    const badge = $('#dsh-check-status');
+    const detail = $('#dsh-check-detail');
+    const button = $('#btn-dsh-check');
+    if (!badge) return null;
+    const mode = $('#ai-dsh-mode')?.value || 'auto';
+    const path = mode === 'custom' ? ($('#ai-dsh-path')?.value?.trim() || '') : '';
+    if (mode === 'custom' && !path) {
+      badge.textContent = '请填写路径';
+      badge.className = 'badge warn';
+      if (detail) detail.textContent = '自定义模式需要填写 dsh 可执行文件路径。';
+      return null;
+    }
+    badge.textContent = '检测中…';
+    badge.className = 'badge muted';
+    if (button) { button.disabled = true; button.textContent = '检测中…'; }
+    try {
+      const data = await api('/api/ai/dsh/check', { method: 'POST', body: { path, timeout: 12 } });
+      const found = Boolean(data.found);
+      badge.textContent = found ? `已找到 ${data.version || ''}`.trim() : '未找到';
+      badge.className = `badge ${found ? 'ok' : 'danger'}`;
+      if (detail) {
+        if (found) {
+          const selected = data.selected || '';
+          const source = data.source ? `（来源：${data.source}）` : '';
+          detail.textContent = `使用 ${selected} ${source} · 版本 ${data.version || '未知'}。${data.mode === 'auto' ? '已自动发现。' : '自定义路径可用。'}`;
+        } else {
+          const tried = toArray(data.candidates).filter((c) => c.error).slice(0, 4).map((c) => `${c.path}: ${c.error}`);
+          detail.textContent = `${data.error || '未找到 dsh'}。请安装 DeepSeek Harness、在自定义路径中指定 dsh，或设置 OJS_DSH_COMMAND。${tried.length ? ' 已尝试：' + tried.join('；') : ''}`;
+        }
+      }
+      return data;
+    } catch (error) {
+      const data = error.data && typeof error.data === 'object' ? error.data : {};
+      badge.textContent = '检测失败';
+      badge.className = 'badge danger';
+      if (detail) detail.textContent = data.detail || data.error || errorMessage(error);
+      return null;
+    } finally {
+      if (button) { button.disabled = false; button.textContent = '检测 DSH'; }
+    }
   }
 
   const BINARY_EXTENSIONS = /\.(zip|7z|rar|png|jpe?g|gif|webp|bmp|pdf|jar|exe|dll|so|dylib|class|pyc|woff2?|ttf|mp3|mp4|mov|avi)$/i;
@@ -2649,6 +2763,9 @@
       $(selector)?.addEventListener('change', () => aiOptions());
       $(selector)?.addEventListener('input', () => aiOptions());
     }
+    $('#ai-dsh-mode')?.addEventListener('change', () => { aiOptions(); checkDsh(); });
+    $('#ai-dsh-path')?.addEventListener('change', () => { aiOptions(); checkDsh(); });
+    $('#btn-dsh-check')?.addEventListener('click', () => checkDsh());
     $('#project-files')?.addEventListener('change', (event) => {
       const selected = Array.from(event.target.files || []);
       state.projectFiles = selected;
@@ -2666,6 +2783,7 @@
     $('#btn-batch-problem')?.addEventListener('click', () => doBatchJudge('problem'));
     $('#btn-batch-all')?.addEventListener('click', () => doBatchJudge('all'));
     $('#btn-batch-limit')?.addEventListener('click', () => doBatchJudge('limit'));
+    $('#btn-judge-doctor')?.addEventListener('click', () => runJudgeDoctor());
     $('#batch-mismatch')?.addEventListener('change', () => renderBatchRows());
     $('#btn-clear-log')?.addEventListener('click', () => {
       state.logHidden = true;
@@ -2695,6 +2813,38 @@
     });
   }
 
+  async function runJudgeDoctor() {
+    const box = $('#judge-doctor-result');
+    if (!box) return;
+    box.classList.remove('hidden');
+    box.textContent = '正在检查测试数据与 Python 解释器…';
+    try {
+      const snapshot = currentSnapshot();
+      if (!snapshot) { box.textContent = '请先选择本地快照。'; return; }
+      const data = await api('/api/judge/doctor', {
+        method: 'POST',
+        body: { domain: snapshot.domain, hid: snapshot.hid, problem: $('#batch-problem')?.value || '' },
+      });
+      if (!data.available) {
+        box.textContent = data.error || '评测模块不可用';
+        return;
+      }
+      const lines = [];
+      lines.push(data.python_ok ? `Python 解释器：${data.python_interpreter}` : `未找到 Python：${data.python_error || '请安装 Python 3 或设置 OJS_PYTHON'}`);
+      for (const p of toArray(data.problems)) {
+        if (p.error) {
+          lines.push(`${p.problem}: 读取失败 · ${p.error}`);
+        } else {
+          lines.push(`${p.problem}: ${p.case_count} 个测例 · checker ${p.checker ? '有' : '无'} · wrapper ${p.extra_source ? '有' : '无'} · ${p.testdata_dir}`);
+        }
+      }
+      box.textContent = lines.join('\n');
+      box.classList.toggle('danger-text', !data.python_ok);
+    } catch (error) {
+      box.textContent = errorMessage(error);
+    }
+  }
+
   async function bootstrap() {
     setupTheme();
     setupTabs();
@@ -2710,6 +2860,8 @@
     window.setInterval(pollJobs, 2500);
     renderProjectFileList();
     loadAiOptions();
+    checkDsh().catch(() => null);
+    checkCodebert().catch(() => null);
   }
 
   document.addEventListener('DOMContentLoaded', () => {

@@ -123,6 +123,11 @@ def run_analysis(
     threshold: float = 0.6,
     max_pairs: int = 20000,
     with_evidence: bool = True,
+    codebert: bool = False,
+    codebert_model: str = "microsoft/codebert-base",
+    codebert_weight: float = 0.15,
+    codebert_max_pairs: int = 300,
+    codebert_cache_dir: str | Path | None = None,
     on_event: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     started = time.time()
@@ -181,6 +186,25 @@ def run_analysis(
         if cur is None or (p.score, p.shared) > (cur.score, cur.shared):
             best[key] = p
     pairs = list(best.values())
+    codebert_status: dict[str, Any] = {"enabled": False, "available": False}
+    if codebert and pairs:
+        try:
+            from .codebert import enrich_pairs
+
+            codebert_status = enrich_pairs(
+                pairs, profiles, model=codebert_model,
+                weight=codebert_weight, max_pairs=codebert_max_pairs,
+                cache_dir=codebert_cache_dir,
+            )
+            log(
+                "codebert: "
+                + ("available" if codebert_status.get("available") else "unavailable")
+                + f", {codebert_status.get('pairs', 0)} pairs"
+            )
+        except Exception as exc:  # noqa: BLE001 - optional signal
+            codebert_status = {"enabled": True, "available": False, "model": codebert_model,
+                               "pairs": 0, "reason": f"{type(exc).__name__}: {exc}"}
+            log(f"codebert failed: {exc}")
     # Clusters are for near-identical copies, not for the long transitive chains
     # that common templates create.  Very large components are reported as
     # "common template" noise instead of collusion groups.
@@ -214,7 +238,8 @@ def run_analysis(
     # one-liner is weak evidence, while a 100-line structural copy is not.
     def _rank(p: Pair) -> float:
         substance = min(1.0, (min(p.size_a, p.size_b) / 80.0) ** 0.5)
-        return p.score * (0.35 + 0.65 * substance)
+        run = min(1.0, p.longest_fragment / 40.0)
+        return p.score * (0.30 + 0.45 * substance + 0.25 * run)
 
     pairs.sort(key=lambda p: (-_rank(p), -p.score, p.problem, p.rid_a, p.rid_b))
     pair_dicts = [p.to_dict() for p in pairs]
@@ -222,7 +247,11 @@ def run_analysis(
     for d, p in zip(pair_dicts, pairs):
         d["rank_score"] = round(_rank(p), 4)
         d["variant_count"] = variant_counts.get((p.problem, min(p.uid_a, p.uid_b), max(p.uid_a, p.uid_b)), 1)
-        d["substantial"] = bool(min(p.size_a, p.size_b) >= 18 and p.shared >= 10)
+        d["substantial"] = bool(
+            min(p.size_a, p.size_b) >= 18
+            and p.shared >= 10
+            and (p.exact or p.longest_fragment >= 12)
+        )
         d["evidence_lines"] = int(sum(e.get("lines", 0) for e in d.get("evidence", [])))
         reasons = []
         if d["exact"]:
@@ -231,6 +260,17 @@ def run_analysis(
             f"共享 {d['shared']} 个指纹：containment {d['containment']:.2f}，"
             f"Jaccard {d['jaccard']:.2f}，AST 相似度 {d['ast_cosine']:.2f}"
         )
+        if d.get("codebert_cosine") is not None:
+            reasons.append(f"CodeBERT 语义相似度 {d['codebert_cosine']:.2f}（可选信号，权重较低）")
+        if d.get("longest_fragment"):
+            reasons.append(
+                f"最长连续匹配 {d['longest_fragment']} 个归一化 token，"
+                f"总覆盖率 {d.get('token_coverage', 0):.2f}"
+            )
+        if d.get("template_only"):
+            reasons.append("重叠主要是班级模板/基础代码，已降权")
+        elif d.get("distinctive_ratio", 1.0) < 0.5:
+            reasons.append(f"仅 {d.get('distinctive_ratio', 0):.0%} 指纹为区分性代码，请人工复核")
         if d["evidence"]:
             total_lines = sum(e["lines"] for e in d["evidence"])
             reasons.append(f"匹配代码块 {len(d['evidence'])} 段，共 {total_lines} 行")
@@ -253,7 +293,12 @@ def run_analysis(
         "homework_id": snap.homework_id,
         "title": snap.homework.get("title", ""),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "config": {"threshold": threshold, "max_pairs": max_pairs, "with_evidence": with_evidence},
+        "config": {
+            "threshold": threshold, "max_pairs": max_pairs, "with_evidence": with_evidence,
+            "codebert": bool(codebert), "codebert_model": codebert_model,
+            "codebert_weight": codebert_weight, "codebert_max_pairs": codebert_max_pairs,
+        },
+        "codebert": codebert_status,
         "stats": stats,
         "per_problem": per_problem,
         "pairs": pair_dicts,

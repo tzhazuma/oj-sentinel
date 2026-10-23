@@ -878,6 +878,66 @@ def _execute_case(
     }
 
 
+_PYTHON_CACHE: str | None = None
+
+
+def resolve_python_interpreter() -> str | None:
+    """Find a real Python interpreter, even inside a PyInstaller bundle.
+
+    In a frozen desktop app ``sys.executable`` is the app binary, not Python.
+    Running student code or ``checker.py`` with it would launch a second copy
+    of the GUI (and every local verdict would be wrong).  Prefer an explicit
+    ``OJS_PYTHON`` / ``PYTHON`` override, then the normal system interpreters.
+    """
+    global _PYTHON_CACHE
+    override = (os.environ.get("OJS_PYTHON") or os.environ.get("PYTHON") or "").strip()
+    candidates: list[str] = []
+    if override:
+        candidates.append(override)
+    if not getattr(sys, "frozen", False):
+        candidates.append(sys.executable)
+    for name in ("python3", "python", "python3.12", "python3.11", "python3.10"):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    if sys.platform == "darwin":
+        candidates += ["/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3"]
+    elif sys.platform.startswith("win"):
+        local = os.environ.get("LOCALAPPDATA", "")
+        if local:
+            candidates += [
+                str(Path(local) / "Programs" / "Python" / "Python312" / "python.exe"),
+                str(Path(local) / "Programs" / "Python" / "Python311" / "python.exe"),
+            ]
+        candidates += ["python.exe", "python3.exe"]
+    else:
+        candidates += ["/usr/bin/python3", "/usr/local/bin/python3"]
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = candidate if os.path.isabs(candidate) else (shutil.which(candidate) or "")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if path == sys.executable and getattr(sys, "frozen", False):
+            continue
+        try:
+            proc = subprocess.run(
+                [path, "-c", "import sys; print(sys.version_info[0])"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                env={k: v for k, v in os.environ.items() if not k.startswith("PYTHON")},
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if proc.returncode == 0 and (proc.stdout or "").strip() == "3":
+            _PYTHON_CACHE = path
+            return path
+    return None
+
+
 def _checker_command(checker: Any) -> tuple[list[str] | None, str]:
     if not checker:
         return None, ""
@@ -888,7 +948,13 @@ def _checker_command(checker: Any) -> tuple[list[str] | None, str]:
         path, order = str(checker), None
     if not path:
         return None, ""
-    return [sys.executable, str(path)], str(path)
+    suffix = Path(str(path)).suffix.lower()
+    if suffix == ".py":
+        python = resolve_python_interpreter()
+        if not python:
+            return None, str(path)
+        return [python, str(path)], str(path)
+    return [str(path)], str(path)
 
 
 def _run_checker(
@@ -989,7 +1055,20 @@ def run_program(
     language_key = normalize_language(language)
     spec = LANGUAGE_SPECS.get(language_key, {"extension": ".txt", "compiled": False})
     source_file = source_name or f"main{spec.get('extension', '.txt')}"
-    interpreter = interpreter or sys.executable
+    interpreter = interpreter or resolve_python_interpreter()
+    if language_key == "python" and not interpreter:
+        return RunResult(
+            status=COMPILE_ERROR,
+            score=0.0,
+            cases=[],
+            stdout="",
+            stderr="",
+            compile_output=(
+                "未找到可用的 Python 解释器。打包版需要系统 Python 3；"
+                "请安装 python.org / Xcode Command Line Tools，或设置 OJS_PYTHON。"
+            ),
+            total=0,
+        )
 
     compile_error = ""
     if language_key == "python":
@@ -1300,8 +1379,27 @@ def run_stdin(
     """Run one program once and return its raw output (used for validation)."""
 
     language_key = normalize_language(language)
-    interpreter = interpreter or sys.executable
+    interpreter = interpreter or resolve_python_interpreter()
     source = code or ""
+    if language_key == "python" and not interpreter:
+        return {
+            "status": COMPILE_ERROR,
+            "stdout": "",
+            "stderr": "",
+            "compile_output": (
+                "未找到可用的 Python 解释器。打包版需要系统 Python 3；"
+                "请安装 python.org / Xcode Command Line Tools，或设置 OJS_PYTHON。"
+            ),
+            "returncode": None,
+            "timed_out": False,
+            "output_limit_exceeded": False,
+            "output_size": 0,
+            "elapsed_ms": 0,
+            "memory_kb": 0,
+            "input_path": None,
+            "output_path": None,
+            "spawn_error": True,
+        }
     if extra_source and language_key == "python":
         source = source.rstrip("\n") + "\n\n" + extra_source.lstrip("\n")
     result = {

@@ -120,6 +120,11 @@ def cmd_analyze(args):
         threshold=args.threshold,
         max_pairs=args.max_pairs,
         with_evidence=not args.no_evidence,
+        codebert=bool(getattr(args, "codebert", False)),
+        codebert_model=getattr(args, "codebert_model", "microsoft/codebert-base"),
+        codebert_weight=float(getattr(args, "codebert_weight", 0.15)),
+        codebert_max_pairs=int(getattr(args, "codebert_max_pairs", 300)),
+        codebert_cache_dir=getattr(args, "codebert_cache_dir", None),
         on_event=lambda m: (not args.quiet) and print(m, flush=True),
     )
     st = payload["stats"]
@@ -285,13 +290,27 @@ def cmd_crossvalidate(args):
     print(json.dumps({"output": str(out), **summary}, ensure_ascii=False, indent=2))
 
 
+def cmd_dsh_check(args):
+    from .ai.dsh_discovery import discover_dsh
+
+    info = discover_dsh(args.path or None)
+    print(json.dumps(info.to_dict(), ensure_ascii=False, indent=2))
+    return 0 if info.found else 2
+
+
 def cmd_ai(args):
     from .ai import AgentConfig, build_agent
     import os
 
     provider = args.provider or os.environ.get("OJS_AI_PROVIDER", "dsh")
-    config = AgentConfig(provider=provider, model=args.model or "deepseek-v4.1-flash",
-                         timeout=args.timeout)
+    kwargs = {
+        "provider": provider,
+        "model": args.model or "deepseek-v4.1-flash",
+        "timeout": args.timeout,
+    }
+    if getattr(args, "dsh_path", None):
+        kwargs["dsh_command"] = args.dsh_path
+    config = AgentConfig(**kwargs)
     agent = build_agent(config)
 
     if args.action in {"review", "diagnose", "tests"}:
@@ -453,6 +472,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--data-dir")
     sp.add_argument("--out-dir")
     sp.add_argument("--threshold", type=float, default=0.6)
+    sp.add_argument("--codebert", action="store_true",
+                    help="optional CodeBERT semantic signal (needs [codebert] extra)")
+    sp.add_argument("--codebert-model", default="microsoft/codebert-base")
+    sp.add_argument("--codebert-weight", type=float, default=0.15)
+    sp.add_argument("--codebert-max-pairs", type=int, default=300)
+    sp.add_argument("--codebert-cache-dir", help="model download cache (default: data/models)")
     sp.add_argument("--max-pairs", type=int, default=20000)
     sp.add_argument("--no-evidence", action="store_true")
     sp.add_argument("--quiet", action="store_true")
@@ -513,6 +538,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--domain")
     sp.add_argument("--data-dir")
     sp.add_argument("--provider", help="dsh (default) | openai | mock | offline")
+    sp.add_argument("--dsh-path", help="custom dsh executable (auto-discovered when omitted)")
     sp.add_argument("--model", default="deepseek-v4.1-flash")
     sp.add_argument("--timeout", type=float, default=300.0)
     sp.add_argument("--rid")
@@ -531,6 +557,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--logs")
     sp.add_argument("--screenshots", action="append")
     sp.set_defaults(func=cmd_ai)
+
+    sp = sub.add_parser("dsh-check", help="probe auto-discovered / custom dsh backends")
+    sp.add_argument("--path", help="custom dsh executable path")
+    sp.set_defaults(func=cmd_dsh_check)
 
     sp = sub.add_parser("serve", help="start the Web GUI")
     sp.add_argument("--host", default="127.0.0.1")

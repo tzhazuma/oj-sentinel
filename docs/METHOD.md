@@ -33,15 +33,25 @@ C / C++：
 - **winnowing 指纹**（MOSS 思路）：token 5-gram → 每 4 个窗口取最小 hash，得到指纹集合。
 - **containment** = 交集 / 较小集合；**Jaccard** = 交集 / 并集。
 - **AST 余弦**：Python 用 `ast` 节点类型分布；C/C++ 用结构统计特征。
-- 综合分 = `0.58 * containment + 0.27 * Jaccard + 0.15 * AST`；归一化代码完全一致时记为 1.0。
+- **最长连续匹配（Greedy String Tiling 近似）**：在归一化 token 序列上用 k-gram 索引
+  找最长连续公共片段，`token_coverage = 最长片段 / 较短代码 token 数`。这比单纯
+  bag-of-fingerprints 更能说明「整段照抄」。
+- **模板/基础代码排除**：同一题内出现频率 >6% 的指纹视为班级模板，不计入
+  containment/Jaccard（仍保留原始指纹数供参考）；`distinctive_ratio` 表示区分性指纹占比。
+- 综合分 = `0.40 * containment + 0.20 * Jaccard + 0.13 * AST + 0.27 * 最长片段占比`；
+  归一化代码完全一致时记为 1.0；模板-only 重叠降权 45%。
+- 两阶段计算：先对全部候选做便宜的 containment/Jaccard/AST 预筛，再只对最有希望的
+  400 对计算最长连续片段，保证全班规模下可运行。
 - 短代码/弱证据降权：少于 30 token 且非精确匹配的 pair 不会进入结果；少于 18 个指纹的 pair
   不进入聚类，并标记 `substantial=false`。
 - 候选生成只用「稀有指纹」倒排索引，避免模板代码造成 O(n²) 噪声。
 
 ## 4. 排序与理由
 
-- 默认阈值 0.60（CLI `--threshold` 可调），按 `rank_score = score × 证据充实度` 排序；
-  充实度由两侧指纹规模决定。这样 100 行的结构性复制会排在 5 行 one-liner 之前。
+- 默认阈值 0.60（CLI `--threshold` 可调），按 `rank_score = score × (指纹充实度 + 最长片段)` 排序；
+  100 行的结构性复制会排在 5 行 one-liner 之前。
+- 报告/GUI 额外展示 `longest_fragment`、`token_coverage`、`distinctive_ratio`、`template_only`；
+  建议人工复核时优先看「最长连续 ≥30 token」且 `containment ≥0.7` 的对。
 - 每个 pair 输出：
   - `reasons`：精确复制 / 共享指纹数 / containment / Jaccard / AST / 匹配行块数；
   - `evidence`：行号区间 + 代码片段；
@@ -73,3 +83,16 @@ C / C++：
 ## 7. 参考
 
 见 `docs/research/landscape.md`（调研；若尚未生成则以 README 的对照表为准）。
+
+## 可选 CodeBERT 语义信号（默认关闭）
+
+Research 结论：CodeBERT 对“改名/重排/换写法”的结构性改写有帮助，但对强模板题会引入
+假阳性，且 CPU 推理明显慢于 winnowing/AST。因此实现为**可选、低权重、只作用于最强候选对**：
+
+- 依赖：`pip install -e ".[codebert]"`（`transformers` + `torch`，不进入发布包）。
+- 开关：CLI `--codebert` / GUI 勾选；模型默认 `microsoft/codebert-base`。
+- 只对按基础分排序的前 `--codebert-max-pairs`（默认 300）对计算；每份代码只嵌入一次。
+- 融合：`score = 0.85 * base_score + 0.15 * codebert_cosine`；原算法仍主导。
+- 模型文件由用户在 GUI 中点击“下载模型到本机”下载到 `data/codebert/<model>`，
+  **绝不打包进安装包**；首次需要网络，之后可离线。
+- 失败/缺依赖时只记录 `codebert.available=false`，普通查重照常完成。

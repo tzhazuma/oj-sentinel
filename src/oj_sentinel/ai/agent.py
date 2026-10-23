@@ -27,6 +27,7 @@ from typing import Any, Callable, Mapping
 
 import requests
 
+from .dsh_discovery import discover_dsh, resolve_dsh
 from .schemas import VERDICT_SCHEMA
 
 DEFAULT_DSH_BASE_URL = "https://opencode.ai/zen/go/v1"
@@ -299,7 +300,11 @@ def build_dsh_overlay(config: AgentConfig | None = None) -> str:
 
 
 def available_dsh(command: str = "dsh") -> bool:
-    return shutil.which(command) is not None
+    """True when the given command or an auto-discovered dsh is usable."""
+    value = (command or "dsh").strip()
+    if value and value not in {"dsh", "dsh.exe", "dsh.cmd"}:
+        return shutil.which(value) is not None or Path(value).expanduser().exists()
+    return bool(resolve_dsh("dsh"))
 
 
 class DshAgent(Agent):
@@ -333,8 +338,20 @@ class DshAgent(Agent):
         try:
             overlay_path = Path(tmpdir) / "overlay.yml"
             overlay_path.write_text(overlay, encoding="utf-8")
+            command_path = cfg.dsh_command or "dsh"
+            if self._runner is None:
+                resolved = resolve_dsh(command_path)
+                if not resolved:
+                    info = discover_dsh()
+                    return self._fallback_result(
+                        prompt, system, json_schema,
+                        "找不到 dsh 后端。"
+                        + (f" 自动检测结果：{info.error}" if info.error else "")
+                        + " 请在 Web「模型设置」中指定 dsh 路径，或设置 OJS_DSH_COMMAND。",
+                    )
+                command_path = resolved
             command = [
-                cfg.dsh_command or "dsh",
+                command_path,
                 "--profile",
                 cfg.dsh_profile or DEFAULT_DSH_PROFILE,
                 "--patch",

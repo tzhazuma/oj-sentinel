@@ -760,7 +760,7 @@ def test_batch_judge_job_exports_and_progress(tmp_path, monkeypatch):
     fake_module = types.ModuleType("oj_sentinel.judge.evaluate")
 
     def fake_batch(snapshot_root, *, problem_key=None, limit=None, accepted_only=False,
-                   language=None, out=None, on_event=None):
+                   language=None, out=None, on_event=None, workers=1):
         captured.update({
             "snapshot_root": str(snapshot_root),
             "problem_key": problem_key,
@@ -768,6 +768,7 @@ def test_batch_judge_job_exports_and_progress(tmp_path, monkeypatch):
             "accepted_only": accepted_only,
             "language": language,
             "out": str(out),
+            "workers": workers,
         })
         results = [
             {
@@ -869,3 +870,29 @@ def test_security_headers_present(client):
     assert response.headers["x-frame-options"] == "DENY"
     assert "content-security-policy" in response.headers
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_judge_doctor_and_codebert_status(tmp_path):
+    make_snapshot(tmp_path)
+    app = server_app.create_app(tmp_path)
+    with TestClient(app) as client:
+        doctor = client.post(
+            "/api/judge/doctor",
+            json={"domain": "DOM", "hid": "HID"},
+        )
+        assert doctor.status_code == 200, doctor.text
+        body = doctor.json()
+        assert body["available"] is True
+        assert body["python_ok"] is True
+        assert body["python_interpreter"]
+        assert any(p.get("problem") == "HW1" for p in body["problems"])
+
+        status = client.post(
+            "/api/ai/codebert/status",
+            json={"model": "microsoft/codebert-base"},
+        )
+        assert status.status_code == 200, status.text
+        data = status.json()
+        assert data["available"] is True
+        assert data["bundled"] is False
+        assert "path" in data

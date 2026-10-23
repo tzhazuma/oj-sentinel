@@ -22,6 +22,11 @@ class Pair:
     jaccard: float = 0.0
     containment: float = 0.0
     ast_cosine: float = 0.0
+    codebert_cosine: float | None = None
+    longest_fragment: int = 0
+    token_coverage: float = 0.0
+    distinctive_ratio: float = 1.0
+    template_only: bool = False
     shared: int = 0
     size_a: int = 0
     size_b: int = 0
@@ -40,6 +45,15 @@ class Pair:
             "jaccard": round(self.jaccard, 4),
             "containment": round(self.containment, 4),
             "ast_cosine": round(self.ast_cosine, 4),
+            "codebert_cosine": (
+                round(self.codebert_cosine, 4)
+                if self.codebert_cosine is not None
+                else None
+            ),
+            "longest_fragment": self.longest_fragment,
+            "token_coverage": round(self.token_coverage, 4),
+            "distinctive_ratio": round(self.distinctive_ratio, 4),
+            "template_only": self.template_only,
             "shared": self.shared, "size_a": self.size_a, "size_b": self.size_b,
             "same_user": self.same_user, "exact": self.exact, "method": self.method,
             "evidence": self.evidence,
@@ -79,7 +93,48 @@ def line_evidence(a: CodeProfile, b: CodeProfile, limit: int = 6) -> list[dict[s
     return blocks[:limit]
 
 
-def compare(a: CodeProfile, b: CodeProfile, *, evidence: bool = False) -> Pair:
+def fragment_metrics(a_tokens: list[str], b_tokens: list[str], *, min_block: int = 8) -> tuple[int, float]:
+    """Longest matching token run and coverage (Greedy String Tiling style).
+
+    Uses a k-gram index instead of difflib: for 500-3,000-token submissions this
+    is effectively linear and avoids the O(n*m) worst case that made a full
+    class analysis unusably slow.  ``min_block`` is the minimum meaningful
+    copied run (the research recommendation is 30-40 tokens for review).
+    """
+    if not a_tokens or not b_tokens:
+        return 0, 0.0
+    if a_tokens == b_tokens:
+        return len(a_tokens), 1.0
+    k = max(3, min(min_block, len(a_tokens), len(b_tokens)))
+    index: dict[tuple[str, ...], list[int]] = {}
+    for j in range(len(b_tokens) - k + 1):
+        key = tuple(b_tokens[j : j + k])
+        bucket = index.get(key)
+        if bucket is None:
+            index[key] = [j]
+        elif len(bucket) < 24:  # cap pathological repeated-token buckets
+            bucket.append(j)
+    best = 0
+    for i in range(len(a_tokens) - k + 1):
+        bucket = index.get(tuple(a_tokens[i : i + k]))
+        if not bucket:
+            continue
+        for j in bucket:
+            run = k
+            while (
+                i + run < len(a_tokens)
+                and j + run < len(b_tokens)
+                and a_tokens[i + run] == b_tokens[j + run]
+            ):
+                run += 1
+            if run > best:
+                best = run
+    return best, min(1.0, best / max(1, min(len(a_tokens), len(b_tokens))))
+
+
+def compare(a: CodeProfile, b: CodeProfile, *, evidence: bool = False,
+            fps_a: set[int] | None = None, fps_b: set[int] | None = None,
+            compute_fragment: bool = True) -> Pair:
     pair = Pair(
         problem=a.problem, rid_a=a.rid, rid_b=b.rid, uid_a=a.user_id, uid_b=b.user_id,
         same_user=a.user_id == b.user_id, size_a=len(a.fingerprints), size_b=len(b.fingerprints),
@@ -88,13 +143,22 @@ def compare(a: CodeProfile, b: CodeProfile, *, evidence: bool = False) -> Pair:
         pair.score = 1.0
         pair.jaccard = pair.containment = pair.ast_cosine = 1.0
         pair.shared = len(a.fingerprints)
+        pair.longest_fragment = min(len(a.tokens), len(b.tokens))
+        pair.token_coverage = 1.0
         pair.exact = True
         pair.method = "exact-normalised"
         if evidence:
             pair.evidence = line_evidence(a, b)
         return pair
-    sa, sb = a.fingerprints, b.fingerprints
+    sa = set(fps_a) if fps_a is not None else a.fingerprints
+    sb = set(fps_b) if fps_b is not None else b.fingerprints
+    pair.distinctive_ratio = (
+        min(len(sa), len(sb)) / max(1, min(len(a.fingerprints), len(b.fingerprints)))
+    )
+    pair.template_only = bool(a.fingerprints and b.fingerprints and (not sa or not sb))
     if not sa or not sb:
+        # Everything in common is class boilerplate: keep the pair out of the
+        # review queue unless the whole normalised file is identical.
         return pair
     inter = len(sa & sb)
     union = len(sa | sb)
@@ -102,13 +166,33 @@ def compare(a: CodeProfile, b: CodeProfile, *, evidence: bool = False) -> Pair:
     pair.jaccard = inter / union if union else 0.0
     pair.containment = inter / min(len(sa), len(sb)) if sa and sb else 0.0
     pair.ast_cosine = ast_cosine(a.ast_features, b.ast_features)
-    score = 0.58 * pair.containment + 0.27 * pair.jaccard + 0.15 * pair.ast_cosine
+    if compute_fragment:
+        pair.longest_fragment, pair.token_coverage = fragment_metrics(a.tokens, b.tokens)
+        min_tokens = max(1, min(len(a.tokens), len(b.tokens)))
+        fragment_score = min(1.0, pair.longest_fragment / min_tokens)
+        # Research-guided weights: distinctive-token overlap + long contiguous
+        # runs matter more than raw AST bag-of-nodes similarity.
+        score = (
+            0.40 * pair.containment
+            + 0.20 * pair.jaccard
+            + 0.13 * pair.ast_cosine
+            + 0.27 * fragment_score
+        )
+        # A short contiguous match is weak; require a meaningful run for top ranks.
+        if pair.longest_fragment < 12 and not pair.exact:
+            score *= 0.82
+    else:
+        # Cheap prefilter score; fragment is computed only for the best
+        # candidates (a k-gram run is not free at class scale).
+        score = 0.55 * pair.containment + 0.27 * pair.jaccard + 0.18 * pair.ast_cosine
     # Short programs are naturally similar; damp the score a little.
     min_tokens = min(len(a.tokens), len(b.tokens))
     if min_tokens < 40:
         score *= 0.75
     if style_distance(a.style, b.style) < 0.18:
         score = min(1.0, score + 0.02)
+    if pair.template_only:
+        score *= 0.55
     pair.score = max(0.0, min(1.0, score))
     if evidence and pair.score >= 0.35:
         pair.evidence = line_evidence(a, b)
@@ -167,19 +251,46 @@ def find_pairs(profiles: list[CodeProfile], *, threshold: float = 0.6,
                with_evidence: bool = True, max_pairs: int = 20000) -> list[Pair]:
     if len(profiles) < 2:
         return []
-    candidates, _df = _candidate_pairs(profiles)
-    scored: list[Pair] = []
+    candidates, df = _candidate_pairs(profiles)
+    # Base-code / template exclusion: fingerprints shared by a large share of
+    # the class are boilerplate and must not inflate a pair's score.
+    max_df = max(8, int(len(profiles) * 0.06))
+    distinctive = [
+        {fp for fp in p.fingerprints if df.get(fp, 0) <= max_df}
+        for p in profiles
+    ]
+    # Phase 1: cheap overlap score for every candidate.  Phase 2: compute the
+    # expensive longest-run metric only for the most promising candidates.
+    cheap: list[Pair] = []
     for i, j in candidates:
         a, b = profiles[i], profiles[j]
         if a.user_id == b.user_id:
             continue
-        p = compare(a, b, evidence=False)
-        if p.score < threshold:
+        p = compare(a, b, evidence=False, fps_a=distinctive[i], fps_b=distinctive[j],
+                    compute_fragment=False)
+        # The fragment term can add at most 0.27; keep anything that could
+        # possibly cross the threshold.
+        if p.score + 0.27 < threshold:
             continue
         # Tiny fragments and largely-boilerplate overlap are weak evidence.
         if not p.exact and p.shared < 4:
             continue
         if not p.exact and min(len(a.tokens), len(b.tokens)) < 30 and p.score < 0.8:
+            continue
+        cheap.append(p)
+    cheap.sort(key=lambda p: (-p.score, -p.shared))
+    by_rid = {p.rid: p for p in profiles}
+    index_of = {id(p): i for i, p in enumerate(profiles)}
+    fragment_limit = 400
+    scored: list[Pair] = []
+    for index, p in enumerate(cheap):
+        a, b = by_rid.get(p.rid_a), by_rid.get(p.rid_b)
+        if a is None or b is None:
+            continue
+        if index < fragment_limit:
+            p = compare(a, b, evidence=False,
+                        fps_a=distinctive[index_of[id(a)]], fps_b=distinctive[index_of[id(b)]])
+        if p.score < threshold:
             continue
         scored.append(p)
     scored.sort(key=lambda p: -p.score)

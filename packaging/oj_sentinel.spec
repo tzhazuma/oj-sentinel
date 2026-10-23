@@ -39,7 +39,7 @@ try:
 
     VERSION = package_version()
 except Exception:  # pragma: no cover - collection must never fail the build
-    VERSION = "0.1.0"
+    VERSION = "0.1.1"
 
 
 def _package_data() -> list[tuple[str, str]]:
@@ -130,6 +130,16 @@ excludes = [
     "PySide2",
     "PySide6",
     "pytest",
+    # Optional CodeBERT dependencies and model weights are NEVER bundled; the
+    # user can enable the feature and download a model into the app data dir.
+    "torch",
+    "transformers",
+    "tokenizers",
+    "huggingface_hub",
+    "safetensors",
+    "sentence_transformers",
+    "onnxruntime",
+    "numpy",
 ]
 
 a = Analysis(

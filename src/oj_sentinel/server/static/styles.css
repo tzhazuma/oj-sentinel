@@ -669,3 +669,12 @@ details > summary:hover { color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
 }
+
+/* AI / DSH locator */
+.dsh-locator { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%); }
+.dsh-locator .form-actions.compact { margin: 6px 0; gap: 8px; }
+.dsh-locator #dsh-check-status { white-space: normal; }
+.dsh-locator #dsh-check-detail { margin: 4px 0 0; }
+.spacer { flex: 1 1 auto; }
+.danger-text { color: var(--danger, #e55353); white-space: pre-wrap; }
+#judge-doctor-result { white-space: pre-wrap; margin: 4px 0 8px; }

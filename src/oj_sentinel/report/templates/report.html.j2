@@ -76,7 +76,7 @@ footer{margin-top:50px;color:var(--muted);font-size:12px}
 <td>{{ p.username_a or p.uid_a }}</td><td>{{ p.username_b or p.uid_b }}</td>
 <td><div class="bar"><i style="width:{{ (p.score*100)|round(0) }}%"></i></div><b>{{ (p.score*100)|round(1) }}%</b>
 <span class="pill {% if p.exact %}p-exact{% elif p.score>=0.75 %}p-high{% else %}p-mid{% endif %}">{% if p.exact %}完全一致{% elif p.score>=0.75 %}高度疑似{% else %}可疑{% endif %}</span></td>
-<td class="small">containment {{ '%.2f'|format(p.containment) }}<br>Jaccard {{ '%.2f'|format(p.jaccard) }}<br>AST {{ '%.2f'|format(p.ast_cosine) }}<br>共享指纹 {{ p.shared }}</td>
+<td class="small">containment {{ '%.2f'|format(p.containment) }}<br>Jaccard {{ '%.2f'|format(p.jaccard) }}<br>AST {{ '%.2f'|format(p.ast_cosine) }}{% if p.codebert_cosine is not none %}<br>CodeBERT {{ '%.2f'|format(p.codebert_cosine) }}{% endif %}<br>最长连续 {{ p.longest_fragment }} token · 覆盖率 {{ '%.2f'|format(p.token_coverage) }}<br>共享指纹 {{ p.shared }}</td>
 <td class="small">{% for r in p.reasons %}{{ r }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
 <td>{% if redact %}<span class="muted small">已脱敏（代码与片段移除）</span>{% elif p.evidence %}<details><summary>{{ p.evidence|length }} 段匹配</summary>
 {% for e in p.evidence %}<div class="small muted">A {{ e.a_start }}–{{ e.a_end }} / B {{ e.b_start }}–{{ e.b_end }}（{{ e.lines }} 行）</div><pre>{{ e.snippet }}</pre>{% endfor %}

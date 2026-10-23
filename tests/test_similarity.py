@@ -69,3 +69,31 @@ def test_same_user_not_candidate():
     p2 = build_profile("x2", 9, "P", SRC_A)
     pairs = find_pairs([p1, p2], threshold=0.1, with_evidence=False)
     assert pairs == []
+
+
+def test_fragment_metrics_longest_and_coverage():
+    from oj_sentinel.analysis.similarity import fragment_metrics
+
+    a = ["def", "V", "(", "V", ")", ":", "\n", "return", "V", "+", "0", "\n"]
+    b = ["def", "V", "(", "V", ")", ":", "\n", "return", "V", "+", "0", "\n"]
+    longest, coverage = fragment_metrics(a, b, min_block=3)
+    assert longest == len(a)
+    assert coverage == 1.0
+    c = ["print", "(", '"S"', ")", "\n"]
+    assert fragment_metrics(a, c) == (0, 0.0)
+
+
+def test_template_only_fingerprints_are_damped():
+    a = build_profile("a", 1, "P", SRC_A)
+    b = build_profile("b", 2, "P", SRC_C)
+    p = compare(a, b, fps_a=set(), fps_b=set())
+    assert p.template_only
+    assert p.score == 0.0
+
+
+def test_pair_metrics_are_serialised():
+    a = build_profile("a", 1, "P", SRC_A)
+    b = build_profile("b", 2, "P", SRC_B)
+    d = compare(a, b).to_dict()
+    for key in ("longest_fragment", "token_coverage", "distinctive_ratio", "template_only"):
+        assert key in d

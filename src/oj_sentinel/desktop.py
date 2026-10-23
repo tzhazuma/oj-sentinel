@@ -42,7 +42,7 @@ APP_NAME = "OJ Sentinel"
 APP_SLUG = "oj-sentinel"
 DEFAULT_HOST = "127.0.0.1"
 HEALTH_PATH = "/api/health"
-_FALLBACK_VERSION = "0.1.0"
+_FALLBACK_VERSION = "0.1.1"
 
 LOG = logging.getLogger("oj_sentinel.desktop")
 

@@ -134,6 +134,17 @@
               <label>相似阈值 <input id="analysis-threshold" type="number" value="0.6" min="0.05" max="1" step="0.05"></label>
               <button id="btn-analyze-panel" class="btn primary" type="button">开始分析</button>
             </div>
+            <div class="inline-form mt-8">
+              <label class="check"><input id="analysis-codebert" type="checkbox"> CodeBERT 语义相似度（可选，较慢/占内存）</label>
+              <label>模型 <input id="analysis-codebert-model" value="microsoft/codebert-base" size="28"></label>
+            </div>
+            <p class="hint small">CodeBERT 模型不会打包进安装包；勾选后可在本机下载/指定模型。默认关闭，仅对最强候选对计算，权重较低，结果仍以 winnowing/AST 为主。</p>
+            <div class="form-actions compact">
+              <button id="btn-codebert-check" class="btn ghost small" type="button">检测模型</button>
+              <button id="btn-codebert-download" class="btn ghost small" type="button">下载模型到本机</button>
+              <span id="codebert-status" class="badge muted">未检测</span>
+            </div>
+            <div id="codebert-detail" class="hint small"></div>
             <div id="analysis-meta" class="hint mt-12"></div>
           </div>
         </div>
@@ -372,6 +383,24 @@
               <label>Base URL（openai provider 用，例如 https://host/v1）
                 <input id="ai-base-url" placeholder="留空使用默认">
               </label>
+              <div class="dsh-locator">
+                <div class="grid-2 tight">
+                  <label>DSH 位置
+                    <select id="ai-dsh-mode">
+                      <option value="auto">自动发现（推荐）</option>
+                      <option value="custom">自定义路径</option>
+                    </select>
+                  </label>
+                  <label>自定义 dsh 路径
+                    <input id="ai-dsh-path" placeholder="/usr/local/bin/dsh 或 DeepSeek Harness.app 内的 dsh">
+                  </label>
+                </div>
+                <div class="form-actions compact">
+                  <button id="btn-dsh-check" class="btn ghost small" type="button">检测 DSH</button>
+                  <span id="dsh-check-status" class="badge muted">未检测</span>
+                </div>
+                <p id="dsh-check-detail" class="hint small">打包版从 Finder 启动时 PATH 很小；自动发现会检查 /usr/local/bin、/opt/homebrew/bin、DeepSeek Harness.app 内置路径等。也可以指定自定义路径。</p>
+              </div>
               <div class="grid-2 tight">
                 <label>API key 环境变量 <input id="ai-api-key-env" placeholder="OPENCODE_GO_2_API_KEY"></label>
                 <label>推理强度
@@ -446,8 +475,11 @@
       <div class="card" id="batch-card">
         <div class="card-head">
           <h3>批量本地评测</h3>
+          <span class="spacer"></span>
+          <button id="btn-judge-doctor" class="btn ghost small" type="button">测试数据 / 解释器自检</button>
           <span id="batch-status-badge" class="badge muted">尚未运行</span>
         </div>
+        <div id="judge-doctor-result" class="hint small hidden"></div>
         <p class="hint">后台逐条复评并与 OJ verdict 交叉验证。800–4800 条可能需要数分钟，可轮询进度或离开页面；不会修改 OJ。结果同时写入 <code>analysis/&lt;域名&gt;/&lt;作业&gt;/judge_batch.json</code> 与 <code>.csv</code>。</p>
         <div class="filters">
           <label>题目
@@ -466,12 +498,8 @@
               <option value="cpp">C++</option>
             </select>
           </label>
-          <label>并发
-            <select id="batch-workers">
-              <option value="1" selected>1</option>
-              <option value="4">4</option>
-              <option value="8">8</option>
-            </select>
+          <label>并发数（1–32）
+            <input id="batch-workers" type="number" value="4" min="1" max="32" step="1" inputmode="numeric">
           </label>
           <label class="check"><input id="batch-accepted-only" type="checkbox"> 只评测 OJ 已通过</label>
         </div>
