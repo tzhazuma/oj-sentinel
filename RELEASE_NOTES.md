@@ -73,7 +73,7 @@
 
 ## 验证
 
-- 全量测试：**151 passed**
+- 全量测试：**153 passed**
 - 真实作业（4,767 提交 / 340 学生）重新分析；PDF 中文渲染、ZIP 下载、AI trace、外部 CodeBERT 推理均已实测。
 - 多架构 Release 资产与 v0.1.1 相同：macOS arm64/x86_64、Windows amd64/arm64、Linux x86_64/arm64、Android。
 
