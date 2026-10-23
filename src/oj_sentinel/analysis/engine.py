@@ -128,6 +128,7 @@ def run_analysis(
     codebert_weight: float = 0.15,
     codebert_max_pairs: int = 300,
     codebert_cache_dir: str | Path | None = None,
+    codebert_python: str | None = None,
     on_event: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     started = time.time()
@@ -195,6 +196,7 @@ def run_analysis(
                 pairs, profiles, model=codebert_model,
                 weight=codebert_weight, max_pairs=codebert_max_pairs,
                 cache_dir=codebert_cache_dir,
+                python=codebert_python,
             )
             log(
                 "codebert: "

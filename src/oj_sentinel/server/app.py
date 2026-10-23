@@ -55,7 +55,7 @@ try:  # keep /api/health in sync with the package/build version
 
     VERSION = _package_version()
 except Exception:  # pragma: no cover - minimal source checkout
-    VERSION = "0.1.1"
+    VERSION = "0.1.2"
 COOKIE_NAME = "ojs_session"
 SESSION_TTL = 8 * 60 * 60  # 8 hours, absolute
 LOG_CAP = 500
@@ -1071,6 +1071,7 @@ class AnalyzeRequest(BaseModel):
     codebert_model: str = "microsoft/codebert-base"
     codebert_weight: float = 0.15
     codebert_max_pairs: int = 300
+    codebert_python: str = ""
 
 
 class AIReviewRequest(BaseModel):
@@ -1080,6 +1081,11 @@ class AIReviewRequest(BaseModel):
     rid_a: str
     rid_b: str
     options: dict[str, Any] = Field(default_factory=dict)
+
+
+class EnvironmentRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    model: str = ""
 
 
 class CodeBertModelRequest(BaseModel):
@@ -1101,6 +1107,7 @@ class JudgeRequest(BaseModel):
     time_limit_ms: int = 5000
     memory_limit_mb: int = 256
     language: str = ""
+    interpreter: str = ""
 
 
 class JudgeDoctorRequest(BaseModel):
@@ -1120,6 +1127,18 @@ class JudgeBatchRequest(BaseModel):
     accepted_only: bool = False
     language: str = ""
     workers: int = 1
+    interpreter: str = ""
+
+
+class ExportRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    domain: str
+    hid: str
+    include_pdf: bool = True
+    include_ai: bool = False
+    ai_max_pairs: int = 3
+    top_pairs: int = 30
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectFile(BaseModel):
@@ -1286,6 +1305,30 @@ def _build_agent(options: dict[str, Any] | None = None) -> tuple[Any | None, str
     return None, "oj_sentinel.ai.agent 未提供 Agent/工厂函数"
 
 
+def _trace_agent(agent: Any, task: str, meta: dict[str, Any]) -> tuple[Any, Any]:
+    module, _ = _import_optional("oj_sentinel.ai.trace")
+    recorder_class = getattr(module, "TraceRecorder", None) if module else None
+    if not callable(recorder_class):
+        return agent, None
+    try:
+        recorder = recorder_class(task=task, meta=meta)
+        return recorder.wrap(agent), recorder
+    except Exception:  # noqa: BLE001 - tracing must never break AI calls
+        return agent, None
+
+
+def _finish_trace(context: ServerContext, data: dict[str, Any], recorder: Any) -> None:
+    if recorder is None:
+        return
+    try:
+        trace = recorder.to_dict()
+        path = recorder.save(context.data_dir / "ai-traces")
+        trace["path"] = str(path)
+        data["ai_trace"] = trace
+    except Exception as exc:  # noqa: BLE001
+        data["ai_trace"] = {"error": f"trace 保存失败：{type(exc).__name__}: {exc}"}
+
+
 def _load_ai_review_helper() -> tuple[Any | None, str | None]:
     for module_name in ("oj_sentinel.ai.prompts", "oj_sentinel.ai.review", "oj_sentinel.ai"):
         helper, error = _import_optional(module_name, "review_pair")
@@ -1359,6 +1402,7 @@ def _run_analysis_inprocess(
     codebert_weight: float = 0.15,
     codebert_max_pairs: int = 300,
     codebert_cache_dir: Path | None = None,
+    codebert_python: str | None = None,
 ) -> dict[str, Any]:
     engine, error = _import_optional("oj_sentinel.analysis.engine")
     if engine is None:
@@ -1418,6 +1462,7 @@ def _run_analysis_inprocess(
         "codebert_weight": codebert_weight,
         "codebert_max_pairs": codebert_max_pairs,
         "codebert_cache_dir": codebert_cache_dir or context.data_dir,
+        "codebert_python": codebert_python,
         "on_event": on_event,
         "progress": on_event,
         "on_progress": on_event,
@@ -1794,6 +1839,7 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                     codebert_weight=float(getattr(payload, "codebert_weight", 0.15) or 0.15),
                     codebert_max_pairs=max(1, min(2000, int(getattr(payload, "codebert_max_pairs", 300) or 300))),
                     codebert_cache_dir=context.data_dir,
+                    codebert_python=str(getattr(payload, "codebert_python", "") or "") or None,
                 )
             except _AnalysisSignatureError as exc:
                 jobs.add_log(job, f"分析引擎签名不兼容（{exc}），改用子进程", level="warning")
@@ -1963,6 +2009,17 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
     def get_submission(rid: str, domain: str | None = None, hid: str | None = None):
         return context.submission_payload(rid, domain, hid)
 
+    # -- settings: environment discovery -----------------------------------
+    @app.post("/api/ai/environment", tags=["ai"])
+    def environment(payload: EnvironmentRequest):
+        module, error = _import_optional("oj_sentinel.system_env")
+        detect = getattr(module, "detect_environment", None) if module else None
+        if not callable(detect):
+            return JSONResponse(status_code=501, content={"available": False, "error": error or "环境检测模块未就绪"})
+        data = detect(context.data_dir)
+        data["available"] = True
+        return data
+
     # -- optional CodeBERT model management --------------------------------
     @app.post("/api/ai/codebert/status", tags=["ai"])
     def codebert_status(payload: CodeBertModelRequest):
@@ -1972,6 +2029,17 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
             return JSONResponse(status_code=501, content={"available": False, "error": error or "CodeBERT 模块未就绪"})
         data = check(payload.model or "microsoft/codebert-base", cache_dir=context.data_dir)
         data["available"] = True
+        try:
+            env_module, _ = _import_optional("oj_sentinel.system_env")
+            detect = getattr(env_module, "detect_python_interpreters", None) if env_module else None
+            if callable(detect):
+                data["external_python"] = [
+                    {"path": item.get("path"), "version": item.get("version"),
+                     "torch": item.get("torch"), "transformers": item.get("transformers")}
+                    for item in detect() if item.get("ok") and item.get("torch") and item.get("transformers")
+                ]
+        except Exception:  # noqa: BLE001
+            data["external_python"] = []
         return data
 
     @app.post("/api/ai/codebert/download", tags=["ai"])
@@ -1983,18 +2051,30 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
         model = payload.model or "microsoft/codebert-base"
         job = context.jobs.create("codebert_download", f"下载 CodeBERT 模型 {model}")
 
+        last_percent = {"value": -1}
+
+        def on_bytes(done: int, total: int, name: str) -> None:
+            if not total:
+                return
+            percent = int(5 + 90 * done / total)
+            if percent != last_percent["value"]:
+                last_percent["value"] = percent
+                context.jobs.set_progress(job, max(5, min(95, percent)))
+                context.jobs.add_log(job, f"下载 {name}: {done / 1024 / 1024:.1f}/{total / 1024 / 1024:.1f} MB")
+
         def runner() -> dict[str, Any]:
             context.jobs.add_log(job, f"模型将保存到本机数据目录（不会写入安装包）：{context.data_dir}")
             context.jobs.set_progress(job, 5)
             status = download(model, cache_dir=context.data_dir,
-                              on_progress=lambda message: context.jobs.add_log(job, str(message)))
+                              on_progress=lambda message: context.jobs.add_log(job, str(message)),
+                              on_bytes=on_bytes)
             context.jobs.set_progress(job, 100)
             if not status.get("ok") and not status.get("installed"):
                 raise RuntimeError(status.get("error") or "模型下载未完成")
             return status
 
         context.jobs.start(job, runner)
-        return JSONResponse(status_code=202, content=context.jobs.snapshot(job))
+        return JSONResponse(status_code=202, content=context.jobs.get(job.id) or {})
 
     # -- AI review / judge -------------------------------------------------
     @app.post("/api/ai/dsh/check", tags=["ai"])
@@ -2098,6 +2178,9 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                     "hint": "配置 DSH/OpenAI 或使用 MockAgent 后重试；本次未发送任何学生代码。",
                 },
             )
+        agent, trace = _trace_agent(agent, "pair_review", {
+            "domain": domain, "hid": hid, "rid_a": payload.rid_a, "rid_b": payload.rid_b,
+        })
         sub_a = _submission_object(sub_a_payload, hid)
         sub_b = _submission_object(sub_b_payload, hid)
         try:
@@ -2113,20 +2196,19 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                     pair,
                 )
             except Exception as retry_exc:  # noqa: BLE001
-                return JSONResponse(
-                    status_code=502,
-                    content={
-                        "available": True,
-                        "error": "AI 复核失败",
-                        "detail": _short(retry_exc or exc),
-                    },
-                )
+                failed = {
+                    "available": True,
+                    "error": "AI 复核失败",
+                    "detail": _short(retry_exc or exc),
+                }
+                _finish_trace(context, failed, trace)
+                return JSONResponse(status_code=502, content=_jsonable(failed))
         except Exception as exc:  # noqa: BLE001
-            return JSONResponse(
-                status_code=502,
-                content={"available": True, "error": "AI 复核失败", "detail": _short(exc)},
-            )
+            failed = {"available": True, "error": "AI 复核失败", "detail": _short(exc)}
+            _finish_trace(context, failed, trace)
+            return JSONResponse(status_code=502, content=_jsonable(failed))
         data = _normalise_agent_result(result)
+        _finish_trace(context, data, trace)
         data["available"] = True
         data["helper"] = getattr(helper, "__name__", "review_pair")
         data["pair"] = {
@@ -2176,6 +2258,10 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                     "endpoint": "/api/ai/evaluate-project",
                 },
             )
+        agent, trace = _trace_agent(agent, "project_evaluate", {
+            "title": payload.title, "student": payload.student,
+            "files": [f.name for f in payload.files],
+        })
         assignment = {
             "title": payload.title,
             "description": payload.description,
@@ -2217,11 +2303,11 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
             except TypeError:
                 result = helper(agent, assignment, files, payload.rubric)
         except Exception as exc:  # noqa: BLE001
-            return JSONResponse(
-                status_code=502,
-                content={"available": True, "error": "作品评测失败", "detail": _short(exc)},
-            )
+            failed = {"available": True, "error": "作品评测失败", "detail": _short(exc)}
+            _finish_trace(context, failed, trace)
+            return JSONResponse(status_code=502, content=_jsonable(failed))
         data = _normalise_agent_result(result)
+        _finish_trace(context, data, trace)
         if data.get("error"):
             data["available"] = True
             data["endpoint"] = "/api/ai/evaluate-project"
@@ -2336,6 +2422,8 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
             "time_limit_ms": max(100, min(120000, time_limit_ms)),
             "memory_limit_mb": max(16, min(4096, memory_limit_mb)),
         }
+        if payload.interpreter and Path(payload.interpreter).expanduser().exists():
+            kwargs["interpreter"] = str(Path(payload.interpreter).expanduser())
         if checker:
             kwargs["checker"] = checker
         try:
@@ -2491,6 +2579,9 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
         accepted_only = bool(payload.accepted_only)
         language = (payload.language or "").strip() or None
         workers = max(1, min(32, int(_number(payload.workers, 1))))
+        interpreter = str(payload.interpreter or "").strip()
+        if interpreter and not Path(interpreter).expanduser().exists():
+            return JSONResponse(status_code=400, content={"error": f"Python 解释器不存在：{interpreter}"})
         out_dir = context.analysis_dir(domain, hid)
         out_dir.mkdir(parents=True, exist_ok=True)
         json_path = out_dir / "judge_batch.json"
@@ -2536,6 +2627,7 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
                 out=json_path,
                 on_event=on_event,
                 workers=workers,
+                **({"interpreter": str(Path(interpreter).expanduser())} if interpreter else {}),
             )
             if not isinstance(result, dict):
                 raise RuntimeError("批量评测返回了非预期结果")
@@ -2610,6 +2702,66 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
         return JSONResponse(status_code=202, content=_jsonable(job_dump(context, job)))
 
     # -- reports -----------------------------------------------------------
+    @app.post("/api/report/export", tags=["reports"])
+    def export_report(payload: ExportRequest):
+        """Build a ZIP with HTML/JSON/CSV and optional PDF/AI explanations."""
+        domain = _safe_segment(payload.domain, "域名")
+        hid = _safe_segment(payload.hid, "作业 ID")
+        root = context.snapshot_root(domain, hid)
+        analysis_path = context.analysis_dir(domain, hid) / "analysis.json"
+        if not analysis_path.is_file():
+            return JSONResponse(status_code=409, content={"error": "尚未生成分析结果，请先运行查重分析"})
+        module, error = _import_optional("oj_sentinel.report.export")
+        build = getattr(module, "build_export", None) if module else None
+        if not callable(build):
+            return JSONResponse(status_code=501, content={"error": "导出模块尚未就绪", "detail": error})
+        export_dir = context.data_dir / "exports" / domain / hid
+        job = context.jobs.create("export", f"导出报告 {domain}/{hid}")
+
+        def on_event(message: Any) -> None:
+            message = str(message or "").strip()
+            if not message:
+                return
+            context.jobs.add_log(job, message)
+            match = re.search(r"AI .*?(\d+)\s*/\s*(\d+)", message)
+            if match:
+                done, total = int(match.group(1)), max(1, int(match.group(2)))
+                context.jobs.set_progress(job, 10 + 70 * done / total)
+
+        def runner() -> dict[str, Any]:
+            context.jobs.set_progress(job, 3)
+            result = build(
+                root,
+                analysis_path,
+                export_dir,
+                include_pdf=bool(payload.include_pdf),
+                include_ai=bool(payload.include_ai),
+                ai_options=dict(payload.options or {}),
+                ai_max_pairs=max(1, min(20, int(payload.ai_max_pairs or 3))),
+                top_pairs=max(1, min(300, int(payload.top_pairs or 30))),
+                on_event=on_event,
+            )
+            context.jobs.set_progress(job, 100)
+            return result
+
+        context.jobs.start(job, runner)
+        return JSONResponse(status_code=202, content=context.jobs.get(job.id) or {})
+
+    @app.get("/api/report/export/{job_id}/download", tags=["reports"])
+    def export_download(job_id: str):
+        job = context.jobs.get_raw(job_id)
+        if job is None or not isinstance(job.result, dict):
+            raise HTTPException(status_code=404, detail="导出任务不存在或尚未完成")
+        path = Path(str(job.result.get("path") or "")).resolve()
+        try:
+            path.relative_to(context.data_dir.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="导出文件不在数据目录内")
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="导出文件已被删除")
+        return FileResponse(path, filename=job.result.get("name") or path.name,
+                            media_type="application/zip")
+
     @app.get("/api/report/{domain}/{hid}/{name}", tags=["reports"])
     def download_report(domain: str, hid: str, name: str, inline: bool = False):
         domain = _safe_segment(domain, "域名")

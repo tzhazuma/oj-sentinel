@@ -113,3 +113,13 @@ HW2004=25、HW2003=25、HW2002=20、HW2001=20。
 ### 多架构
 
 CI 矩阵新增 macOS x86_64、Linux arm64、Windows arm64；构建后运行无模型检查与 headless 冒烟。
+
+## 8. v0.1.2 验证（2026-10-23）
+
+- **模型下载**：`POST /api/ai/codebert/download` 返回 202 + job；直连 Hugging Face 下载 476.8 MB 模型，job 进度 5→100，文件落在 `data/codebert/codebert-base`；模型不进安装包。
+- **环境发现**：`POST /api/ai/environment` 返回 9 个 Python 候选、1 个本地 CodeBERT 模型、DSH；发现 `anaconda3/bin/python3.12`（torch 2.11 / transformers 5.3）。
+- **外部 CodeBERT**：用该 Python 加载本地模型，两条代码嵌入成功（768 维），`enrich_pairs` 自动选用；打包版无 torch 时也可用现有环境。
+- **AI trace**：Mock/DSH 复核与作品评测均返回 `ai_trace`，含完整 Prompt、命令、原始输出、解析 JSON、耗时；GUI 显示“AI 调用详情”，文件写入 `data/ai-traces/`。
+- **导出**：`POST /api/report/export` 生成 ZIP，含 `report.html`、`analysis.json`、`final_scores.csv`、`pairs.csv`、`anomalies.csv`、`report.pdf`、`ai-explanations.*`、`ai-trace.json`；PDF 中文渲染 5 页；`GET .../download` 返回 200。
+- **确定性**：winnowing 改用 BLAKE2b；连续两次独立进程分析结果一致（730 对 / 13 簇 / 76 异常）。
+- 全量测试 153 passed。

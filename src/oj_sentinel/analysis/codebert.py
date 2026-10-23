@@ -15,9 +15,11 @@ machine, but the first run downloads model weights from Hugging Face.
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
+import subprocess
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,6 +106,7 @@ def download_model(
     *,
     cache_dir: str | Path | None = None,
     on_progress: Any | None = None,
+    on_bytes: Any | None = None,
 ) -> dict[str, Any]:
     """Download model files into the user data dir (never into the app bundle)."""
     local = Path(model).expanduser()
@@ -134,12 +137,26 @@ def download_model(
             if dest.exists() and dest.stat().st_size > 0:
                 continue
             try:
-                with urllib.request.urlopen(base + name, timeout=60) as response:
-                    data = response.read()
-                dest.write_bytes(data)
+                request = urllib.request.Request(
+                    base + name, headers={"User-Agent": "OJ-Sentinel/0.1"}
+                )
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    total = int(response.headers.get("Content-Length") or 0)
+                    part = dest.with_suffix(dest.suffix + ".part")
+                    done = 0
+                    with part.open("wb") as handle:
+                        while True:
+                            chunk = response.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            handle.write(chunk)
+                            done += len(chunk)
+                            if on_bytes:
+                                on_bytes(done, total, name)
+                    part.replace(dest)
                 downloaded += 1
                 if on_progress:
-                    on_progress(f"已下载 {name}（{len(data) / 1024 / 1024:.1f} MB）")
+                    on_progress(f"已下载 {name}（{done / 1024 / 1024:.1f} MB）")
             except Exception:
                 continue
         if downloaded == 0:
@@ -156,6 +173,72 @@ def download_model(
     if on_progress:
         on_progress(f"下载完成：{status.get('files', 0)} 个文件，{status.get('size_mb', 0)} MB")
     return status
+
+
+
+
+_EXTERNAL_WORKER = r"""
+import json, sys
+model_path = sys.argv[1]
+texts = json.load(sys.stdin)
+import torch
+from transformers import AutoTokenizer, AutoModel
+tok = AutoTokenizer.from_pretrained(model_path)
+mod = AutoModel.from_pretrained(model_path)
+mod.eval()
+out = []
+with torch.no_grad():
+    for start in range(0, len(texts), 8):
+        batch = [str(x or "") for x in texts[start:start + 8]]
+        enc = tok(batch, padding=True, truncation=True, max_length=512, return_tensors="pt")
+        hidden = mod(**enc).last_hidden_state
+        mask = enc["attention_mask"].unsqueeze(-1).float()
+        pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-6)
+        pooled = torch.nn.functional.normalize(pooled, p=2, dim=1)
+        out.extend(pooled.cpu().tolist())
+print(json.dumps(out))
+"""
+
+
+class ExternalCodeBertEmbedder:
+    """Run CodeBERT in an existing Python that already has torch/transformers."""
+
+    def __init__(self, python: str, model_path: str | Path, *, timeout: float = 600.0) -> None:
+        self.python = str(Path(python).expanduser())
+        self.model_path = str(Path(model_path).expanduser())
+        self.timeout = timeout
+
+    def status(self) -> CodeBertStatus:
+        if not Path(self.python).exists():
+            return CodeBertStatus(False, self.model_path, f"Python 不存在：{self.python}")
+        if not Path(self.model_path).is_dir():
+            return CodeBertStatus(False, self.model_path, f"模型目录不存在：{self.model_path}")
+        try:
+            proc = subprocess.run(
+                [self.python, "-c", "import torch, transformers; print('ok')"],
+                capture_output=True, text=True, timeout=20,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return CodeBertStatus(False, self.model_path, f"运行时不可用：{type(exc).__name__}")
+        if proc.returncode != 0:
+            return CodeBertStatus(False, self.model_path, (proc.stderr or "缺少 torch/transformers").strip()[-300:])
+        return CodeBertStatus(True, self.model_path)
+
+    def embed(self, texts: list[str], **_kwargs: Any) -> list[list[float]]:
+        status = self.status()
+        if not status.available:
+            raise RuntimeError(status.reason)
+        proc = subprocess.run(
+            [self.python, "-c", _EXTERNAL_WORKER, self.model_path],
+            input=json.dumps([str(x or "") for x in texts], ensure_ascii=False),
+            capture_output=True, text=True, timeout=self.timeout,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or "外部 CodeBERT 运行失败").strip()[-800:])
+        try:
+            return json.loads((proc.stdout or "").strip().splitlines()[-1])
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"无法解析外部 CodeBERT 输出：{exc}") from exc
 
 
 class CodeBertEmbedder:
@@ -194,6 +277,10 @@ class CodeBertEmbedder:
 
         self._torch = torch
         local = Path(self.model_name).expanduser()
+        if not local.is_dir() and self.cache_dir:
+            cached = model_dir_for(self.cache_dir, self.model_name)
+            if cached.is_dir():
+                local = cached
         source = str(local) if local.is_dir() else self.model_name
         kwargs = {"cache_dir": str(self.cache_dir)} if self.cache_dir and not local.is_dir() else {}
         self._tokenizer = AutoTokenizer.from_pretrained(source, **kwargs)
@@ -234,6 +321,7 @@ def enrich_pairs(
     weight: float = DEFAULT_CODEBERT_WEIGHT,
     max_pairs: int = DEFAULT_MAX_PAIRS,
     cache_dir: str | Path | None = None,
+    python: str | None = None,
     embedder: Any | None = None,
 ) -> dict[str, Any]:
     """Add ``codebert_cosine`` to the strongest pairs, in place.
@@ -244,7 +332,30 @@ def enrich_pairs(
     chosen = sorted(pairs, key=lambda p: (-float(getattr(p, "score", 0.0)), -int(getattr(p, "shared", 0))))[: max(0, int(max_pairs))]
     if not chosen:
         return {"enabled": True, "available": True, "model": model, "pairs": 0, "reason": "no pairs"}
-    engine = embedder or CodeBertEmbedder(model, cache_dir=cache_dir)
+    if embedder is not None:
+        engine = embedder
+    else:
+        engine = CodeBertEmbedder(model, cache_dir=cache_dir)
+        status = engine.status()
+        local = Path(model).expanduser()
+        if not local.is_dir():
+            local = model_dir_for(cache_dir, model)
+        if not status.available and not python:
+            try:
+                from ..system_env import detect_python_interpreters
+
+                for item in detect_python_interpreters():
+                    if item.get("ok") and item.get("torch") and item.get("transformers"):
+                        python = str(item.get("path") or "") or None
+                        if python:
+                            break
+            except Exception:  # noqa: BLE001
+                pass
+        if not status.available and python:
+            if local.is_dir():
+                external = ExternalCodeBertEmbedder(python, local)
+                if external.status().available:
+                    engine = external
     status = engine.status() if hasattr(engine, "status") else CodeBertStatus(True, model)
     if not status.available:
         return {"enabled": True, "available": False, "model": model, "pairs": 0, "reason": status.reason}
@@ -284,6 +395,7 @@ __all__ = [
     "DEFAULT_MAX_PAIRS",
     "check_model",
     "download_model",
+    "ExternalCodeBertEmbedder",
     "enrich_pairs",
     "model_dir_for",
 ]

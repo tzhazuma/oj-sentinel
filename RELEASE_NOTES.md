@@ -1,75 +1,81 @@
-# OJ Sentinel v0.1.1
+# OJ Sentinel v0.1.2
 
-修复本地评测与 OJ 不一致、DSH 后端发现、批量并发输入，并新增可选 CodeBERT 语义信号与更多 CPU 架构安装包。
+集中设置界面、模型下载进度、自动环境发现、AI 调用透明化，以及一键导出完整报告（ZIP/PDF/AI 解释 + 原生保存对话框）。
 
-## 重点修复
+## 新功能
 
-### 1. 本地评测在打包版中“完全不一致”（关键）
+### 1. 统一「设置」界面
 
-根因：PyInstaller 打包后 `sys.executable` 指向 `OJ Sentinel` 应用本身，而不是 Python。
-评测器用 `sys.executable` 运行学生代码和 Hydro `checker.py`，实际启动的是第二个 GUI 进程，
-导致 Python 提交全部 CE/RE、带 checker 的题目全部 WA。
+侧边导航新增 **设置**，集中管理：
+
+- **AI / DSH**：Provider、模型、Base URL、API key 环境变量、推理强度、DSH 自动发现/自定义路径、检测按钮与状态。
+- **本地评测 / Python**：Python 解释器路径、默认并发数、解释器检测。
+- **CodeBERT**：模型名/本地路径、缓存目录、检测模型、下载模型。
+- **本机环境检测**：扫描 Python（含 torch/transformers 版本）、已有 CodeBERT 模型、DSH，可一键选用。
+- **数据与报告**：导出入口。
+
+以前 DSH 设置藏在作品评测的折叠项里，现在有独立入口。
+
+### 2. 模型下载按钮修复与进度
+
+根因：`/api/ai/codebert/download` 返回 job 时调用了不存在的 `JobManager.snapshot()`，接口 500，前端只看到“没反应”。
 
 修复：
-- 新增 `resolve_python_interpreter()`：在冻结应用中自动查找系统 Python 3
-  （`OJS_PYTHON`/`PYTHON` 覆盖、PATH、`/usr/bin/python3`、Homebrew、Windows Python 安装目录）。
-- `run_program`、`run_python`、`checker.py` 调用全部使用真实解释器。
-- 找不到 Python 时返回明确 CE 文案，而不是静默启动 GUI。
-- 新增「测试数据 / 解释器自检」：显示每个题目的测例数、checker、wrapper、testdata 路径和实际 Python。
-- 真机验证（macOS arm64 DMG 同款打包）：HW2001 accepted `20/20`、HW2004 accepted `25/25`、
-  HW2004 WA `22/25`，`matches_oj=true`。
 
-### 2. DSH 后端找不到
+- 返回正确的 job 快照；按钮创建后台任务。
+- GUI 每 1.2 秒轮询 `/api/jobs/{id}`，显示百分比、已下载文件/字节、错误和完成状态。
+- 直连 Hugging Face 下载按 1 MB 流式写入，实时上报进度；无 `huggingface_hub` 的打包版也能下载。
+- 模型始终写入用户数据目录（`data/codebert/<model>`），**不写入安装包**。
 
-打包版从 Finder 启动时 PATH 很小，`dsh` 不在 PATH 中。现在：
-- 自动发现：`OJS_DSH_COMMAND`/`DSH_COMMAND`、PATH、`/usr/local/bin`、`/opt/homebrew/bin`、
-  `~/.local/bin`、DeepSeek Harness.app 内置 `runtime/cli/bin/dsh`、Windows 常见路径。
-- 设置里可选「自动发现」或「自定义路径」，并提供「检测 DSH」按钮，显示路径、版本、候选与失败原因。
-- CLI：`ojs dsh-check [--path ...]`；AI 命令支持 `--dsh-path`。
-- 在最小 PATH（`/usr/bin:/bin`）下验证：自动找到 `/usr/local/bin/dsh` 0.2.1-rc.2。
+### 3. 自动发现本机环境并使用
 
-### 3. 批量评测并发数
+- 扫描 `OJS_PYTHON`/`PYTHON`、PATH、`/usr/bin/python3`、Homebrew、conda、Windows Python 等。
+- 对每个解释器检测 `torch`/`transformers`/`huggingface_hub` 版本。
+- 扫描 `data/codebert`、HF cache、`HF_HOME`/`TRANSFORMERS_CACHE` 中的已有模型。
+- 检测 DSH 路径与版本。
+- CodeBERT 推理优先使用当前进程；若打包版没有 torch/transformers，会自动选择已发现的、带 torch/transformers 的 Python（也可在设置中手动指定），通过子进程加载本地模型。**模型和运行时都不打包。**
 
-- GUI 从固定 1/4/8 下拉改为 **1–32 数字输入**，并真正传给评测引擎。
-- 服务端同样限制 1–32；CLI `--workers` 不变。
+### 4. AI 调用过程与输出可见
 
-## 算法改进（research 结论落地）
+- 新增 `TraceRecorder` / `TracedAgent`，记录每次 AI 调用：
+  - provider/model、实际 dsh 命令、耗时
+  - **完整 Prompt / System**
+  - 模型原始输出、解析后的 JSON、错误
+  - 调用时间、usage
+- GUI 的 AI 复核 / 作品评测结果里有 **“AI 调用详情”** 折叠面板，可查看上述全部内容。
+- 每次调用同时保存到 `data/ai-traces/<时间>-<任务>.json`；导出 ZIP 里包含 `ai-trace.json`。
+- 这解决了“AI 调用失败但看不到过程”的排查问题；敏感代码仅保存在本机。
 
-- **模板/基础代码排除**：同一题中出现频率 >6% 的指纹不计入 containment/Jaccard；
-  `distinctive_ratio`、`template_only` 写入分析结果与报告。
-- **最长连续匹配**：k-gram 索引近似 Greedy String Tiling，输出 `longest_fragment` 与
-  `token_coverage`；两阶段计算（先便宜预筛，再只对前 400 对计算长片段），保证全班规模可运行。
-- 综合分调整为 `0.40*containment + 0.20*Jaccard + 0.13*AST + 0.27*最长片段占比`；
-  模板-only 重叠降权 45%，短片段降权。
-- 报告/GUI/CSV 展示新指标与理由；仍保留双方完整源码、高亮相似行与人工确认。
-- 真实数据结果：481 组跨学生可疑对（模板排除后）、13 个近复制簇、77 条异常线索；
-  原始 v0.1.0 口径为 1,509 对/32 簇。
+### 5. 一键导出完整报告
 
-## 可选 CodeBERT（默认关闭，模型不打包）
+概览「报告与导出」和设置页都有 **“一键导出完整报告…”**：
 
-- 新增 `[codebert]` 可选依赖（`transformers` + `torch`），**不进入桌面安装包**。
-- `ojs analyze --codebert` 或 GUI 勾选后启用；只对最强候选对计算，权重默认 0.15，
-  结果仍以 winnowing/AST 为主。
-- GUI「检测模型 / 下载模型到本机」：模型保存在用户数据目录 `data/codebert/<model>`，
-  不写入安装包；首次下载需要网络，下载后可离线使用。
-- 发布包构建时排除 `torch`/`transformers`/`tokenizers`/`huggingface_hub` 与模型权重；
-  CI 用 `packaging/check_no_model.py` 检查。
-- 需要更快/更省资源时不要启用；普通查重无需任何模型。
+- ZIP 内容：
+  - `report.html`：完整可视化报告（双方源码、高亮、理由）
+  - `analysis.json`：结构化数据
+  - `final_scores.csv` / `pairs.csv` / `anomalies.csv`
+  - `report.pdf`：可选中文 PDF（理由、证据片段、异常表、AI 解释）
+  - `ai-explanations.md/.json` + `ai-trace.json`：可选 AI 详细解释与调用过程
+  - `README.md` / `manifest.json`
+- **PDF**：reportlab 生成，中文字体 STSong-Light；包含统计、可疑对、异常行为和 AI 解释。
+- **AI 解释**：可选，调用 DSH 对前 N 对可疑代码做复核；结果强制标注“需人工确认”。
+- **保存位置**：
+  - 桌面应用（pywebview）通过原生「另存为」对话框选择路径；
+  - Chromium 浏览器使用 File System Access API；
+  - 其他浏览器回退到普通下载。
+- 全程本地生成，不上传数据。
 
-## 多架构安装包
+### 6. 算法确定性修复
 
-| 平台 | 产物 |
-| --- | --- |
-| macOS arm64 | `OJ-Sentinel-0.1.1-macos-arm64.dmg` / `.zip` |
-| macOS x86_64 | `OJ-Sentinel-0.1.1-macos-x86_64.dmg` / `.zip` |
-| Windows amd64 | `OJ-Sentinel-0.1.1-windows-amd64.exe` / `.zip` |
-| Windows arm64 | `OJ-Sentinel-0.1.1-windows-arm64.exe` / `.zip` |
-| Linux x86_64 | `OJ-Sentinel-0.1.1-linux-x86_64.AppImage` / `oj-sentinel_0.1.1_amd64.deb` |
-| Linux arm64 | `OJ-Sentinel-0.1.1-linux-arm64.AppImage` / `oj-sentinel_0.1.1_arm64.deb` |
-| Android | `OJ-Sentinel-0.1.1-android-debug.apk` |
+发现 winnowing 使用 Python 内置 `hash(tuple)`，而该哈希每个进程随机化；由于 winnowing 取窗口最小值，同一份数据在不同进程会得到不同的指纹和可疑对数量（实测 481/565/607 波动）。
 
-未签名构建：macOS/Windows 首次启动会有 Gatekeeper/SmartScreen 提示；Android 为 debug 签名。
-Linux AppImage 窗口模式需要 WebKitGTK（无窗口服务器模式不需要）。
+已改为稳定的 BLAKE2b 64 位 token 哈希，重复分析结果一致（当前真实数据：730 对、13 簇、76 条异常，具体数字随阈值/数据而变）。同时保留模板排除与最长连续片段优化。
+
+## 验证
+
+- 全量测试：**151 passed**
+- 真实作业（4,767 提交 / 340 学生）重新分析；PDF 中文渲染、ZIP 下载、AI trace、外部 CodeBERT 推理均已实测。
+- 多架构 Release 资产与 v0.1.1 相同：macOS arm64/x86_64、Windows amd64/arm64、Linux x86_64/arm64、Android。
 
 ## 升级
 
@@ -79,4 +85,4 @@ pip install -e ".[dev,desktop]"
 pytest -q
 ```
 
-已有 `data/` 快照可直接复用；重新运行 `ojs analyze` 以应用新算法，重新生成报告。
+已有 `data/` 可直接复用；重新运行一次分析以应用确定性指纹。

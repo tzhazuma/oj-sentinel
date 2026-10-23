@@ -678,3 +678,24 @@ details > summary:hover { color: var(--text); }
 .spacer { flex: 1 1 auto; }
 .danger-text { color: var(--danger, #e55353); white-space: pre-wrap; }
 #judge-doctor-result { white-space: pre-wrap; margin: 4px 0 8px; }
+
+/* Settings / export */
+.settings-intro .form-actions { margin-top: 8px; }
+.link-btn { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0 2px; font: inherit; text-decoration: underline; }
+.env-results { white-space: pre-wrap; max-height: 360px; overflow: auto; margin-top: 8px; }
+.env-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+.env-item code { word-break: break-all; }
+.export-dialog { width: min(680px, 94vw); border: 1px solid var(--border); border-radius: 14px; padding: 0; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px rgba(0,0,0,.35); }
+.export-dialog::backdrop { background: rgba(0,0,0,.45); }
+.export-form { padding: 18px 20px; }
+.export-options { display: grid; gap: 8px; margin: 12px 0; }
+.export-dialog .job-log { max-height: 160px; overflow: auto; white-space: pre-wrap; font-size: 12px; background: var(--bg); border-radius: 8px; padding: 8px; margin-top: 8px; }
+
+
+/* AI call trace */
+.ai-trace { margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg); }
+.ai-trace summary { cursor: pointer; color: var(--accent); }
+.ai-trace-call { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.ai-trace-title { font-weight: 600; font-size: 13px; }
+.ai-trace-label { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.ai-trace-pre { white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; font-size: 11px; background: var(--surface); border-radius: 6px; padding: 6px; }

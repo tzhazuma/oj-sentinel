@@ -319,6 +319,8 @@ class DshAgent(Agent):
     ) -> None:
         self.config = config or AgentConfig(provider="dsh")
         self.fallback = fallback
+        #: Last command used, exposed for transparent AI traces.
+        self.last_command: list[str] = []
         #: Test seam: ``runner(cmd, prompt, timeout) -> (returncode, stdout, stderr)``.
         self._runner = runner
 
@@ -358,6 +360,7 @@ class DshAgent(Agent):
                 str(overlay_path),
                 "-",
             ]
+            self.last_command = list(command)
             try:
                 if self._runner is not None:
                     returncode, stdout, stderr = self._runner(

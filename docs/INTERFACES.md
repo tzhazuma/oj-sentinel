@@ -199,7 +199,12 @@ Auth: `POST /api/session` `{base_url, domain, username, password}` -> sets
 | GET | `/api/snapshots/{domain}/{hid}/anomalies` | anomalies |
 | GET | `/api/snapshots/{domain}/{hid}/final-scores` | per-student per-problem last-submission scores |
 | GET | `/api/submissions/{rid}?domain=&hid=` | code + detail |
+| POST | `/api/ai/environment` | `{}` -> Python/torch/transformers/CodeBERT/DSH 自动发现结果 |
+| POST | `/api/ai/codebert/status` | `{model?}` -> 模型路径/大小/依赖/外部运行时 |
+| POST | `/api/ai/codebert/download` | `{model?}` -> 后台 job，模型落到数据目录（不打包） |
 | POST | `/api/ai/dsh/check` | `{path?,timeout?}` -> `{found,selected,version,candidates,searched,error}` |
+| POST | `/api/report/export` | 后台生成 ZIP（HTML/JSON/CSV + 可选 PDF/AI 解释） |
+| GET | `/api/report/export/{job}/download` | 下载导出 ZIP |
 | POST | `/api/ai/review` | `{domain,hid,rid_a,rid_b,options?}` -> AI verdict (sync/queued) |
 | POST | `/api/judge/run` | `{domain,hid,rid}` -> local verdict |
 | GET | `/api/report/{domain}/{hid}/{name}` | download generated report |

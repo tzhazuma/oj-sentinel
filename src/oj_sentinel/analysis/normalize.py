@@ -7,6 +7,7 @@ fully offline: student code never leaves the machine.
 from __future__ import annotations
 
 import ast
+import hashlib
 import builtins
 import io
 import keyword
@@ -215,12 +216,22 @@ def c_family_features(code: str, family: str) -> dict[str, float]:
     return {f"c_{k}": v for k, v in feats.items()}
 
 
+def _stable_token_hash(tokens: list[str]) -> int:
+    """Stable 64-bit hash; Python's ``hash`` is randomized per process.
+
+    Winnowing keeps the *minimum* hash in every window, so a randomized hash
+    changes which k-grams survive and made pair counts differ between runs.
+    """
+    payload = "\x1f".join(tokens).encode("utf-8", "replace")
+    return int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "big")
+
+
 def kgram_hashes(tokens: list[str], k: int = 5) -> list[int]:
     if len(tokens) < k:
-        return [hash(tuple(tokens))] if tokens else []
+        return [_stable_token_hash(tokens)] if tokens else []
     out: list[int] = []
     for i in range(len(tokens) - k + 1):
-        out.append(hash(tuple(tokens[i : i + k])))
+        out.append(_stable_token_hash(tokens[i : i + k]))
     return out
 
 

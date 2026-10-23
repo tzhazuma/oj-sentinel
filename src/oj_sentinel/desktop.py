@@ -32,6 +32,7 @@ import socket
 import sys
 import threading
 import time
+import base64
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -42,7 +43,7 @@ APP_NAME = "OJ Sentinel"
 APP_SLUG = "oj-sentinel"
 DEFAULT_HOST = "127.0.0.1"
 HEALTH_PATH = "/api/health"
-_FALLBACK_VERSION = "0.1.1"
+_FALLBACK_VERSION = "0.1.2"
 
 LOG = logging.getLogger("oj_sentinel.desktop")
 
@@ -304,6 +305,43 @@ def setup_logging(data_dir: Path, level: str = "info") -> None:
         root.addHandler(stream_handler)
 
 
+class DesktopApi:
+    """Small JS bridge used by the Web GUI for native save dialogs."""
+
+    def save_bytes(self, filename: str, data_base64: str) -> str:
+        """Ask the native window for a save path and write the ZIP there."""
+        try:
+            import webview
+        except ImportError:
+            return ""
+        if not webview.windows:
+            return ""
+        safe_name = Path(str(filename or "OJ-Sentinel-report.zip")).name
+        if not safe_name.lower().endswith(".zip"):
+            safe_name += ".zip"
+        dialog = getattr(webview, "SAVE_DIALOG", None)
+        if dialog is None:
+            return ""
+        try:
+            chosen = webview.windows[0].create_file_dialog(
+                dialog,
+                save_filename=safe_name,
+                file_types=("ZIP archive (*.zip)",),
+            )
+        except Exception as exc:  # noqa: BLE001 - native dialog failure
+            LOG.warning("save dialog failed: %s", exc)
+            return ""
+        if not chosen:
+            return ""
+        path = Path(chosen if isinstance(chosen, str) else chosen[0])
+        try:
+            path.write_bytes(base64.b64decode(data_base64))
+        except (OSError, ValueError) as exc:
+            LOG.warning("could not write exported report: %s", exc)
+            return ""
+        return str(path)
+
+
 def open_window(url: str, title: str = APP_NAME, debug: bool = False) -> Any:
     """Open the pywebview window (blocking until the last window closes)."""
     try:
@@ -322,6 +360,7 @@ def open_window(url: str, title: str = APP_NAME, debug: bool = False) -> Any:
         height=860,
         min_size=(980, 640),
         text_select=True,
+        js_api=DesktopApi(),
     )
     LOG.info("opening desktop window for %s", url)
     webview.start(debug=debug)

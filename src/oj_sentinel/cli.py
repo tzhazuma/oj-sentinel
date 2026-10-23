@@ -125,6 +125,7 @@ def cmd_analyze(args):
         codebert_weight=float(getattr(args, "codebert_weight", 0.15)),
         codebert_max_pairs=int(getattr(args, "codebert_max_pairs", 300)),
         codebert_cache_dir=getattr(args, "codebert_cache_dir", None),
+        codebert_python=getattr(args, "codebert_python", None),
         on_event=lambda m: (not args.quiet) and print(m, flush=True),
     )
     st = payload["stats"]
@@ -477,7 +478,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--codebert-model", default="microsoft/codebert-base")
     sp.add_argument("--codebert-weight", type=float, default=0.15)
     sp.add_argument("--codebert-max-pairs", type=int, default=300)
-    sp.add_argument("--codebert-cache-dir", help="model download cache (default: data/models)")
+    sp.add_argument("--codebert-cache-dir", help="model download cache (default: data)")
+    sp.add_argument("--codebert-python", help="Python with torch/transformers for external CodeBERT")
     sp.add_argument("--max-pairs", type=int, default=20000)
     sp.add_argument("--no-evidence", action="store_true")
     sp.add_argument("--quiet", action="store_true")

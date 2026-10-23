@@ -278,7 +278,7 @@ def find_pairs(profiles: list[CodeProfile], *, threshold: float = 0.6,
         if not p.exact and min(len(a.tokens), len(b.tokens)) < 30 and p.score < 0.8:
             continue
         cheap.append(p)
-    cheap.sort(key=lambda p: (-p.score, -p.shared))
+    cheap.sort(key=lambda p: (-p.score, -p.shared, p.problem, p.rid_a, p.rid_b))
     by_rid = {p.rid: p for p in profiles}
     index_of = {id(p): i for i, p in enumerate(profiles)}
     fragment_limit = 400

@@ -300,7 +300,7 @@
 
   async function ensureTabData(tab, force = false) {
     const snapshot = currentSnapshot();
-    if (!snapshot && !['acquire', 'project'].includes(tab)) return;
+    if (!snapshot && !['acquire', 'project', 'settings'].includes(tab)) return;
     if (tab === 'overview') {
       renderSnapshotCards();
       renderOverviewEmpty();
@@ -1318,11 +1318,113 @@
     }
   }
 
+  function renderEnvResults(data) {
+    const box = $('#env-results');
+    if (!box) return;
+    box.innerHTML = '';
+    const add = (title, lines) => {
+      const item = el('div', 'env-item');
+      const h = el('strong'); h.textContent = title; item.appendChild(h);
+      for (const line of lines) {
+        const p = el('div'); p.textContent = line; item.appendChild(p);
+      }
+      box.appendChild(item);
+      return item;
+    };
+    const py = toArray(data.python);
+    const pyBox = add('Python 环境', []);
+    for (const item of py) {
+      const line = `${item.path} · Python ${item.version || '?'} · torch ${item.torch || '无'} · transformers ${item.transformers || '无'}`;
+      const p = el('div'); p.textContent = line; pyBox.appendChild(p);
+      if (item.ok) {
+        const use = el('button', 'btn ghost small'); use.type = 'button'; use.textContent = '用作评测/运行时解释器';
+        use.addEventListener('click', () => {
+          if ($('#settings-judge-python')) $('#settings-judge-python').value = item.path;
+          const badge = $('#python-check-status'); if (badge) { badge.textContent = '已选择'; badge.className = 'badge ok'; }
+          saveLocalSettings();
+        });
+        pyBox.appendChild(use);
+      }
+    }
+    const models = toArray(data.codebert_models);
+    const mBox = add('已发现的 CodeBERT 模型', models.length ? [] : ['未发现本地模型']);
+    for (const model of models) {
+      const p = el('div'); p.textContent = `${model.path} · ${model.size_mb} MB · ${model.files} 文件`; mBox.appendChild(p);
+      const use = el('button', 'btn ghost small'); use.type = 'button'; use.textContent = '使用此模型';
+      use.addEventListener('click', () => {
+        if ($('#settings-codebert-model')) $('#settings-codebert-model').value = model.path;
+        saveLocalSettings(); checkCodebert();
+      });
+      mBox.appendChild(use);
+    }
+    if (data.dsh) {
+      const d = data.dsh;
+      const dBox = add('DSH 后端', [
+        d.found ? `已发现：${d.selected} · ${d.version || ''}` : `未发现：${d.error || ''}`,
+        ...toArray(d.searched).slice(0, 6).map((p) => `搜索：${p}`),
+      ]);
+      if (d.found) {
+        const use = el('button', 'btn ghost small'); use.type = 'button'; use.textContent = '填为自定义 DSH 路径';
+        use.addEventListener('click', () => {
+          if ($('#ai-dsh-mode')) $('#ai-dsh-mode').value = 'custom';
+          if ($('#ai-dsh-path')) $('#ai-dsh-path').value = d.selected;
+          checkDsh();
+        });
+        dBox.appendChild(use);
+      }
+    }
+    const time = $('#env-check-time'); if (time) time.textContent = `检测于 ${new Date().toLocaleTimeString()}`;
+  }
+
+  async function detectEnvironment() {
+    const box = $('#env-results');
+    if (box) box.textContent = '正在检测 Python、模型与 DSH…';
+    const badge = $('#python-check-status');
+    if (badge) { badge.textContent = '检测中…'; badge.className = 'badge muted'; }
+    try {
+      const data = await api('/api/ai/environment', { method: 'POST', body: { model: codebertModel() } });
+      if (!data.available) throw new Error(data.error || '环境检测不可用');
+      renderEnvResults(data);
+      if (badge) {
+        const withTorch = toArray(data.python).find((p) => p.ok && p.torch && p.transformers);
+        badge.textContent = withTorch ? `找到可用运行时：${withTorch.path}` : '未找到带 torch/transformers 的 Python';
+        badge.className = `badge ${withTorch ? 'ok' : 'warn'}`;
+      }
+    } catch (error) {
+      if (box) box.textContent = errorMessage(error);
+      if (badge) { badge.textContent = '检测失败'; badge.className = 'badge danger'; }
+    }
+  }
+
+  async function checkPython() {
+    const path = judgePython();
+    const badge = $('#python-check-status');
+    const detail = $('#python-check-detail');
+    if (badge) { badge.textContent = '检测中…'; badge.className = 'badge muted'; }
+    try {
+      const data = await api('/api/ai/environment', { method: 'POST', body: {} });
+      const found = toArray(data.python).find((p) => p.ok && (!path || p.path === path));
+      if (found) {
+        if (badge) { badge.textContent = `可用 · Python ${found.version || ''}`; badge.className = 'badge ok'; }
+        if (detail) detail.textContent = `${found.path} · torch ${found.torch || '无'} · transformers ${found.transformers || '无'}`;
+        if (!path && $('#settings-judge-python')) $('#settings-judge-python').value = found.path;
+        return found;
+      }
+      if (badge) { badge.textContent = '不可用'; badge.className = 'badge danger'; }
+      if (detail) detail.textContent = path ? `路径不可用：${path}` : '未找到可用的 Python 3。';
+      return null;
+    } catch (error) {
+      if (badge) { badge.textContent = '检测失败'; badge.className = 'badge danger'; }
+      if (detail) detail.textContent = errorMessage(error);
+      return null;
+    }
+  }
+
   async function checkCodebert() {
     const badge = $('#codebert-status');
     const detail = $('#codebert-detail');
     if (!badge) return null;
-    const model = $('#analysis-codebert-model')?.value?.trim() || 'microsoft/codebert-base';
+    const model = codebertModel();
     badge.textContent = '检测中…';
     badge.className = 'badge muted';
     try {
@@ -1335,8 +1437,12 @@
       }
       const deps = data.dependencies || {};
       const missing = Object.entries(deps).filter(([, ok]) => !ok).map(([name]) => name);
+      const external = toArray(data.external_python);
       if (data.installed && data.dependencies_ok) {
         badge.textContent = `已就绪 · ${data.size_mb} MB`;
+        badge.className = 'badge ok';
+      } else if (data.installed && external.length) {
+        badge.textContent = `模型已下载 · 外部运行时可用`;
         badge.className = 'badge ok';
       } else if (data.installed) {
         badge.textContent = '模型已下载，缺依赖';
@@ -1350,6 +1456,7 @@
           `路径：${data.path}`,
           `文件：${data.files} 个 · ${data.size_mb} MB`,
           `依赖：${missing.length ? '缺少 ' + missing.join(', ') : 'torch / transformers / huggingface_hub 已安装'}`,
+          external.length ? `外部运行时：${external.map((p) => `${p.path} (torch ${p.torch}, transformers ${p.transformers})`).join('；')}` : '外部运行时：未发现带 torch/transformers 的 Python', 
           data.installed ? '模型已在本机，可直接勾选 CodeBERT。' : '模型未随安装包分发；点击“下载模型到本机”或手动放置到上述路径。',
         ].join('\n');
       }
@@ -1363,17 +1470,42 @@
   }
 
   async function downloadCodebert() {
-    const model = $('#analysis-codebert-model')?.value?.trim() || 'microsoft/codebert-base';
+    const model = codebertModel();
     const badge = $('#codebert-status');
+    const detail = $('#codebert-detail');
     if (badge) { badge.textContent = '下载任务创建中…'; badge.className = 'badge muted'; }
     try {
       const job = await api('/api/ai/codebert/download', { method: 'POST', body: { model } });
       upsertJob(job);
-      toast('模型下载任务已开始；可在「采集」页任务日志查看进度。', 'success');
+      state.codebertJobId = job.id;
+      toast('模型下载任务已开始，进度显示在下方。', 'success');
+      if (badge) { badge.textContent = `下载中 0%`; badge.className = 'badge warn'; }
       pollJobs();
+      const started = Date.now();
+      const timer = window.setInterval(async () => {
+        if (!state.codebertJobId) { window.clearInterval(timer); return; }
+        try {
+          const current = await api(`/api/jobs/${state.codebertJobId}`);
+          const pct = Number(current.progress) || 0;
+          if (badge) badge.textContent = current.status === 'succeeded' ? '下载完成' : `下载中 ${pct}%`;
+          if (detail) detail.textContent = (current.log || []).slice(-6).join('\n');
+          if (['succeeded', 'failed', 'cancelled'].includes(current.status) || Date.now() - started > 30 * 60 * 1000) {
+            window.clearInterval(timer);
+            state.codebertJobId = null;
+            if (current.status === 'succeeded') {
+              if (badge) { badge.textContent = '下载完成'; badge.className = 'badge ok'; }
+              checkCodebert();
+            } else if (current.status === 'failed') {
+              if (badge) { badge.textContent = '下载失败'; badge.className = 'badge danger'; }
+              if (detail) detail.textContent = current.error || (current.log || []).slice(-4).join('\n');
+            }
+          }
+        } catch (_) { /* poll again */ }
+      }, 1200);
     } catch (error) {
       toast(`模型下载失败：${errorMessage(error)}`, 'error', 6500);
       if (badge) { badge.textContent = '下载失败'; badge.className = 'badge danger'; }
+      if (detail) detail.textContent = errorMessage(error);
     }
   }
 
@@ -1400,7 +1532,8 @@
           hid: snapshot.hid,
           threshold,
           codebert: Boolean($('#analysis-codebert')?.checked),
-          codebert_model: $('#analysis-codebert-model')?.value?.trim() || 'microsoft/codebert-base',
+          codebert_model: codebertModel(),
+          codebert_python: judgePython(),
         },
       });
       upsertJob(job);
@@ -1908,6 +2041,46 @@
     }
   }
 
+  function appendAiTrace(container, data) {
+    const trace = data && data.ai_trace;
+    if (!trace || !Array.isArray(trace.calls) || !trace.calls.length) return;
+    const details = el('details', 'ai-trace');
+    const summary = el('summary', '', `AI 调用详情（${trace.calls.length} 次调用${trace.path ? ' · 已保存到 ' + trace.path : ''}）`);
+    details.appendChild(summary);
+    for (const call of trace.calls) {
+      const box = el('div', 'ai-trace-call');
+      const title = el('div', 'ai-trace-title');
+      title.textContent = `#${call.index} · ${call.provider || ''}/${call.model || ''} · ${call.duration_ms} ms · ${call.ok ? '成功' : '失败'}`;
+      box.appendChild(title);
+      if (call.command && call.command.length) {
+        box.appendChild(el('div', 'ai-trace-label', '命令'));
+        box.appendChild(el('pre', 'ai-trace-pre', call.command.join(' ')));
+      }
+      if (call.prompt) {
+        box.appendChild(el('div', 'ai-trace-label', 'Prompt（发送给模型的完整内容）'));
+        box.appendChild(el('pre', 'ai-trace-pre', call.prompt));
+      }
+      if (call.system) {
+        box.appendChild(el('div', 'ai-trace-label', 'System'));
+        box.appendChild(el('pre', 'ai-trace-pre', call.system));
+      }
+      if (call.raw_text) {
+        box.appendChild(el('div', 'ai-trace-label', '模型原始输出'));
+        box.appendChild(el('pre', 'ai-trace-pre', call.raw_text));
+      }
+      if (call.parsed) {
+        box.appendChild(el('div', 'ai-trace-label', '解析后的 JSON'));
+        box.appendChild(el('pre', 'ai-trace-pre', JSON.stringify(call.parsed, null, 2)));
+      }
+      if (call.error) {
+        box.appendChild(el('div', 'ai-trace-label', '错误'));
+        box.appendChild(el('pre', 'ai-trace-pre danger-text', call.error));
+      }
+      details.appendChild(box);
+    }
+    container.appendChild(details);
+  }
+
   function renderAiResult(container, data) {
     container.innerHTML = '';
     const verdict = data.verdict || data.data || {};
@@ -1929,6 +2102,7 @@
     const meta = [data.provider, data.model].filter(Boolean).join(' / ');
     if (meta) container.appendChild(el('p', 'muted small', `模型：${meta}`));
     if (data.error) container.appendChild(el('p', 'warn-text', `错误：${data.error}`));
+    appendAiTrace(container, data);
     container.appendChild(el('p', 'hint', 'AI 结论仅作参考，请结合源码与证据人工判定。'));
     if (!verdictValue && !summary && !data.error) {
       container.appendChild(el('pre', '', JSON.stringify(data, null, 2)));
@@ -2103,6 +2277,7 @@
       language: $('#judge-language').value,
       time_limit_ms: Number($('#judge-time').value) || 5000,
       memory_limit_mb: Number($('#judge-memory').value) || 256,
+      interpreter: judgePython(),
     };
     const container = $('#judge-result');
     container.innerHTML = '<p class="hint">正在本地评测（编译 + 运行测试点）…</p>';
@@ -2370,6 +2545,7 @@
       accepted_only: Boolean($('#batch-accepted-only')?.checked),
       language: $('#batch-language')?.value || '',
       workers: Math.max(1, Math.min(32, Number($('#batch-workers')?.value) || 1)),
+      interpreter: judgePython(),
     };
     if (mode === 'limit') {
       body.limit = Math.max(1, Number($('#batch-limit')?.value) || 50);
@@ -2413,6 +2589,49 @@
     }
     if ($('#ai-dsh-mode') && saved.dsh_mode) $('#ai-dsh-mode').value = saved.dsh_mode;
     if ($('#ai-dsh-path') && saved.dsh_path) $('#ai-dsh-path').value = saved.dsh_path;
+  }
+
+  const SETTINGS_KEY = 'ojs.settings';
+
+  function loadLocalSettings() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch (_) { saved = {}; }
+    if ($('#settings-judge-python') && saved.judge_python) $('#settings-judge-python').value = saved.judge_python;
+    if ($('#settings-default-workers') && saved.default_workers) $('#settings-default-workers').value = saved.default_workers;
+    if ($('#settings-codebert-model') && saved.codebert_model) $('#settings-codebert-model').value = saved.codebert_model;
+    if ($('#settings-codebert-cache') && saved.codebert_cache) $('#settings-codebert-cache').value = saved.codebert_cache;
+    if ($('#analysis-codebert-model') && saved.codebert_model) $('#analysis-codebert-model').value = saved.codebert_model;
+    if ($('#batch-workers') && saved.default_workers) $('#batch-workers').value = saved.default_workers;
+  }
+
+  function saveLocalSettings() {
+    const payload = {
+      judge_python: $('#settings-judge-python')?.value?.trim() || '',
+      default_workers: $('#settings-default-workers')?.value || '4',
+      codebert_model: $('#settings-codebert-model')?.value?.trim() || $('#analysis-codebert-model')?.value?.trim() || 'microsoft/codebert-base',
+      codebert_cache: $('#settings-codebert-cache')?.value?.trim() || '',
+    };
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload)); } catch (_) { /* private mode */ }
+    if ($('#analysis-codebert-model') && payload.codebert_model) $('#analysis-codebert-model').value = payload.codebert_model;
+    if ($('#batch-workers') && payload.default_workers) $('#batch-workers').value = payload.default_workers;
+    const badge = $('#settings-saved');
+    if (badge) { badge.textContent = '已保存'; badge.className = 'badge ok'; setTimeout(() => { badge.textContent = '本机浏览器保存'; badge.className = 'badge muted'; }, 1800); }
+    toast('设置已保存到本机浏览器。', 'success');
+    return payload;
+  }
+
+  function judgePython() {
+    return $('#settings-judge-python')?.value?.trim() || '';
+  }
+
+  function codebertModel() {
+    return $('#settings-codebert-model')?.value?.trim()
+      || $('#analysis-codebert-model')?.value?.trim()
+      || 'microsoft/codebert-base';
+  }
+
+  function codebertCache() {
+    return $('#settings-codebert-cache')?.value?.trim() || '';
   }
 
   function aiOptions() {
@@ -2687,6 +2906,7 @@
       details.appendChild(el('pre', 'output', data.text));
       container.appendChild(details);
     }
+    appendAiTrace(container, data);
 
     const reviewKey = projectReviewKey(result.title, result.student);
     const review = getProjectReview(reviewKey);
@@ -2811,6 +3031,141 @@
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) pollJobs();
     });
+    $('#btn-codebert-check')?.addEventListener('click', () => checkCodebert());
+    $('#btn-codebert-download')?.addEventListener('click', () => downloadCodebert());
+    $('#btn-settings-save')?.addEventListener('click', () => saveLocalSettings());
+    $('#btn-env-detect')?.addEventListener('click', () => detectEnvironment());
+    $('#btn-python-check')?.addEventListener('click', () => checkPython());
+    $('#btn-reset-settings')?.addEventListener('click', () => {
+      try { localStorage.removeItem(SETTINGS_KEY); } catch (_) { /* ignore */ }
+      loadLocalSettings();
+      toast('已恢复默认设置。', 'success');
+    });
+    $('#btn-settings-export')?.addEventListener('click', () => openExportDialog());
+    $('#btn-export-report')?.addEventListener('click', () => openExportDialog());
+    $('#btn-export-start')?.addEventListener('click', () => startExport());
+    $('#btn-export-close')?.addEventListener('click', () => $('#export-dialog')?.close());
+    $('#btn-export-cancel')?.addEventListener('click', () => $('#export-dialog')?.close());
+    $$('.link-btn[data-tab]').forEach((button) => {
+      button.addEventListener('click', () => switchTab(button.dataset.tab));
+    });
+  }
+
+  function openExportDialog() {
+    const snapshot = currentSnapshot();
+    if (!snapshot) { toast('请先选择本地快照。', 'warn'); return; }
+    const dialog = $('#export-dialog');
+    if (!dialog) return;
+    if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.classList.remove('hidden');
+    if ($('#export-log')) { $('#export-log').classList.add('hidden'); $('#export-log').textContent = ''; }
+    if ($('#export-progress-wrap')) $('#export-progress-wrap').classList.add('hidden');
+    if ($('#btn-export-start')) $('#btn-export-start').disabled = false;
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        resolve(result.includes(',') ? result.split(',')[1] : result);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function saveExportBlob(blob, filename) {
+    if (window.pywebview?.api?.save_bytes) {
+      const b64 = await blobToBase64(blob);
+      const path = await window.pywebview.api.save_bytes(filename, b64);
+      if (path) toast(`报告已保存：${path}`, 'success', 8000);
+      else toast('已取消保存。', 'warn');
+      return;
+    }
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        toast(`报告已保存：${handle.name}`, 'success', 8000);
+        return;
+      } catch (error) {
+        if (error && error.name === 'AbortError') { toast('已取消保存。', 'warn'); return; }
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast('浏览器已开始下载报告（可在下载设置中指定位置）。', 'success', 6000);
+  }
+
+  async function startExport() {
+    const snapshot = currentSnapshot();
+    if (!snapshot) return;
+    const button = $('#btn-export-start');
+    if (button) button.disabled = true;
+    const includePdf = Boolean($('#export-pdf')?.checked);
+    const includeAi = Boolean($('#export-ai')?.checked);
+    const topPairs = Math.max(1, Math.min(300, Number($('#export-top-pairs')?.value) || 30));
+    const aiPairs = Math.max(1, Math.min(20, Number($('#export-ai-pairs')?.value) || 3));
+    const progressWrap = $('#export-progress-wrap');
+    const log = $('#export-log');
+    if (progressWrap) progressWrap.classList.remove('hidden');
+    if (log) { log.classList.remove('hidden'); log.textContent = ''; }
+    const setProgress = (percent, text) => {
+      if ($('#export-progress-bar')) $('#export-progress-bar').style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      if ($('#export-progress-percent')) $('#export-progress-percent').textContent = `${Math.round(percent)}%`;
+      if ($('#export-progress-text')) $('#export-progress-text').textContent = text || '';
+    };
+    setProgress(1, '创建导出任务…');
+    try {
+      const job = await api('/api/report/export', {
+        method: 'POST',
+        body: {
+          domain: snapshot.domain,
+          hid: snapshot.hid,
+          include_pdf: includePdf,
+          include_ai: includeAi,
+          top_pairs: topPairs,
+          ai_max_pairs: aiPairs,
+          options: aiOptions(),
+        },
+      });
+      upsertJob(job);
+      const jobId = job.id;
+      let done = null;
+      for (let i = 0; i < 3600; i += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        const current = await api(`/api/jobs/${jobId}`);
+        setProgress(Number(current.progress) || 0, current.message || '生成中…');
+        if (log) log.textContent = (current.log || []).slice(-12).join('\n');
+        if (current.status === 'succeeded') { done = current; break; }
+        if (['failed', 'cancelled'].includes(current.status)) throw new Error(current.error || '导出失败');
+      }
+      if (!done) throw new Error('导出超时');
+      setProgress(100, '下载压缩包…');
+      const response = await fetch(`/api/report/export/${jobId}/download`);
+      if (!response.ok) throw new Error(`下载导出文件失败：HTTP ${response.status}`);
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const match = /filename="?([^";]+)"?/.exec(disposition);
+      const filename = (match && match[1]) || (done.result && done.result.name) || 'OJ-Sentinel-report.zip';
+      await saveExportBlob(blob, filename);
+      setProgress(100, '已完成');
+      toast('完整报告已导出。', 'success', 6000);
+    } catch (error) {
+      setProgress(0, '导出失败');
+      if (log) { log.classList.remove('hidden'); log.textContent = errorMessage(error); }
+      toast(`导出失败：${errorMessage(error)}`, 'error', 8000);
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   async function runJudgeDoctor() {
@@ -2850,7 +3205,7 @@
     setupTabs();
     bindEvents();
     const hash = window.location.hash.replace('#', '');
-    if (['overview', 'acquire', 'pairs', 'anomalies', 'final', 'project', 'judge'].includes(hash)) {
+    if (['overview', 'acquire', 'pairs', 'anomalies', 'final', 'project', 'judge', 'settings'].includes(hash)) {
       switchTab(hash, { load: false });
     }
     await Promise.allSettled([loadHealth(), loadSnapshots(), loadSession()]);
@@ -2860,6 +3215,7 @@
     window.setInterval(pollJobs, 2500);
     renderProjectFileList();
     loadAiOptions();
+    loadLocalSettings();
     checkDsh().catch(() => null);
     checkCodebert().catch(() => null);
   }

@@ -39,7 +39,7 @@ try:
 
     VERSION = package_version()
 except Exception:  # pragma: no cover - collection must never fail the build
-    VERSION = "0.1.1"
+    VERSION = "0.1.2"
 
 
 def _package_data() -> list[tuple[str, str]]:
@@ -86,6 +86,15 @@ def _hidden_imports() -> list[str]:
         "email.mime.multipart",
         "email.mime.text",
         "jinja2.ext",
+        "reportlab",
+        "reportlab.pdfbase",
+        "reportlab.pdfbase.cidfonts",
+        "reportlab.platypus",
+        "reportlab.lib",
+        "reportlab.lib.pagesizes",
+        "reportlab.lib.styles",
+        "reportlab.lib.units",
+        "reportlab.lib.colors",
     ]
     for package, extra in (
         ("oj_sentinel", None),

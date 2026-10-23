@@ -64,6 +64,7 @@
       <button class="tab" data-tab="final" role="tab" aria-selected="false">评分</button>
       <button class="tab" data-tab="project" role="tab" aria-selected="false">作品评测</button>
       <button class="tab" data-tab="judge" role="tab" aria-selected="false">评测</button>
+      <button class="tab" data-tab="settings" role="tab" aria-selected="false">设置</button>
       <span class="tabs-spacer"></span>
       <span id="job-indicator" class="job-indicator" hidden>有后台任务运行中…</span>
     </div>
@@ -127,6 +128,10 @@
           <div class="card">
             <div class="card-head"><h3>报告与导出</h3></div>
             <div id="report-links" class="link-list"><p class="hint">尚未生成报告。</p></div>
+            <div class="form-actions compact">
+              <button id="btn-export-report" class="btn primary small" type="button">一键导出完整报告…</button>
+              <span class="hint small">ZIP：HTML + JSON/CSV + 可选 PDF/AI 详细解释</span>
+            </div>
             <div class="divider"></div>
             <h4>运行查重分析</h4>
             <p class="hint">阈值越高，只保留高度相似的代码对。分析在后台线程运行，不会阻塞页面。</p>
@@ -139,12 +144,7 @@
               <label>模型 <input id="analysis-codebert-model" value="microsoft/codebert-base" size="28"></label>
             </div>
             <p class="hint small">CodeBERT 模型不会打包进安装包；勾选后可在本机下载/指定模型。默认关闭，仅对最强候选对计算，权重较低，结果仍以 winnowing/AST 为主。</p>
-            <div class="form-actions compact">
-              <button id="btn-codebert-check" class="btn ghost small" type="button">检测模型</button>
-              <button id="btn-codebert-download" class="btn ghost small" type="button">下载模型到本机</button>
-              <span id="codebert-status" class="badge muted">未检测</span>
-            </div>
-            <div id="codebert-detail" class="hint small"></div>
+            <p class="hint small">模型的检测、下载与环境发现已移到「设置」页；勾选后仍在此处运行。</p>
             <div id="analysis-meta" class="hint mt-12"></div>
           </div>
         </div>
@@ -367,52 +367,7 @@
               <input id="project-files" type="file" multiple>
             </label>
             <div id="project-file-list" class="file-list"><span class="muted small">尚未选择文件。</span></div>
-            <details class="ai-settings">
-              <summary>模型设置（可选，保存在本机浏览器）</summary>
-              <div class="grid-2 tight mt-12">
-                <label>Provider
-                  <select id="ai-provider">
-                    <option value="dsh">DSH（默认，本地 agent）</option>
-                    <option value="openai">OpenAI-compatible HTTP</option>
-                    <option value="mock">Mock（测试）</option>
-                    <option value="offline">Offline（禁用 AI）</option>
-                  </select>
-                </label>
-                <label>模型 <input id="ai-model" placeholder="deepseek-v4.1-flash"></label>
-              </div>
-              <label>Base URL（openai provider 用，例如 https://host/v1）
-                <input id="ai-base-url" placeholder="留空使用默认">
-              </label>
-              <div class="dsh-locator">
-                <div class="grid-2 tight">
-                  <label>DSH 位置
-                    <select id="ai-dsh-mode">
-                      <option value="auto">自动发现（推荐）</option>
-                      <option value="custom">自定义路径</option>
-                    </select>
-                  </label>
-                  <label>自定义 dsh 路径
-                    <input id="ai-dsh-path" placeholder="/usr/local/bin/dsh 或 DeepSeek Harness.app 内的 dsh">
-                  </label>
-                </div>
-                <div class="form-actions compact">
-                  <button id="btn-dsh-check" class="btn ghost small" type="button">检测 DSH</button>
-                  <span id="dsh-check-status" class="badge muted">未检测</span>
-                </div>
-                <p id="dsh-check-detail" class="hint small">打包版从 Finder 启动时 PATH 很小；自动发现会检查 /usr/local/bin、/opt/homebrew/bin、DeepSeek Harness.app 内置路径等。也可以指定自定义路径。</p>
-              </div>
-              <div class="grid-2 tight">
-                <label>API key 环境变量 <input id="ai-api-key-env" placeholder="OPENCODE_GO_2_API_KEY"></label>
-                <label>推理强度
-                  <select id="ai-reasoning">
-                    <option value="max">max</option>
-                    <option value="high">high</option>
-                    <option value="low">low</option>
-                  </select>
-                </label>
-              </div>
-              <p class="hint small">密钥只从服务端环境变量读取，不写入浏览器/仓库；DSH 使用本机已登录的 opencode-go-2 配置。</p>
-            </details>
+            <p class="hint">模型、DSH 路径、Python 解释器与 CodeBERT 模型统一在「设置」页配置。<button class="link-btn" type="button" data-tab="settings">打开设置</button></p>
             <div class="form-actions">
               <button id="btn-project-evaluate" class="btn primary" type="submit">开始 AI 评测</button>
               <button id="btn-project-clear" class="btn ghost" type="reset">清空</button>
@@ -538,6 +493,120 @@
         </div>
       </div>
     </section>
+
+    <!-- 设置 -->
+    <section id="panel-settings" class="panel" role="tabpanel" aria-labelledby="tab-settings">
+      <div class="card settings-intro">
+        <div class="card-head">
+          <h3>设置</h3>
+          <span id="settings-saved" class="badge muted">本机浏览器保存</span>
+        </div>
+        <p class="hint">这里集中配置 DSH 后端、模型、Python 解释器、CodeBERT 模型与报告导出。设置只保存在当前浏览器；密钥仍只从服务端环境变量读取。</p>
+        <div class="form-actions">
+          <button id="btn-settings-save" class="btn primary" type="button">保存设置</button>
+          <button id="btn-env-detect" class="btn ghost" type="button">自动检测本机环境</button>
+          <button id="btn-reset-settings" class="btn ghost" type="button">恢复默认</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>AI / DSH</h3><span class="badge muted">DSH 为默认 agent</span></div>
+            <details class="ai-settings" open>
+              <summary>模型与 DSH 参数（保存在本机浏览器）</summary>
+              <div class="grid-2 tight mt-12">
+                <label>Provider
+                  <select id="ai-provider">
+                    <option value="dsh">DSH（默认，本地 agent）</option>
+                    <option value="openai">OpenAI-compatible HTTP</option>
+                    <option value="mock">Mock（测试）</option>
+                    <option value="offline">Offline（禁用 AI）</option>
+                  </select>
+                </label>
+                <label>模型 <input id="ai-model" placeholder="deepseek-v4.1-flash"></label>
+              </div>
+              <label>Base URL（openai provider 用，例如 https://host/v1）
+                <input id="ai-base-url" placeholder="留空使用默认">
+              </label>
+              <div class="dsh-locator">
+                <div class="grid-2 tight">
+                  <label>DSH 位置
+                    <select id="ai-dsh-mode">
+                      <option value="auto">自动发现（推荐）</option>
+                      <option value="custom">自定义路径</option>
+                    </select>
+                  </label>
+                  <label>自定义 dsh 路径
+                    <input id="ai-dsh-path" placeholder="/usr/local/bin/dsh 或 DeepSeek Harness.app 内的 dsh">
+                  </label>
+                </div>
+                <div class="form-actions compact">
+                  <button id="btn-dsh-check" class="btn ghost small" type="button">检测 DSH</button>
+                  <span id="dsh-check-status" class="badge muted">未检测</span>
+                </div>
+                <p id="dsh-check-detail" class="hint small">打包版从 Finder 启动时 PATH 很小；自动发现会检查 /usr/local/bin、/opt/homebrew/bin、DeepSeek Harness.app 内置路径等。也可以指定自定义路径。</p>
+              </div>
+              <div class="grid-2 tight">
+                <label>API key 环境变量 <input id="ai-api-key-env" placeholder="OPENCODE_GO_2_API_KEY"></label>
+                <label>推理强度
+                  <select id="ai-reasoning">
+                    <option value="max">max</option>
+                    <option value="high">high</option>
+                    <option value="low">low</option>
+                  </select>
+                </label>
+              </div>
+              <p class="hint small">密钥只从服务端环境变量读取，不写入浏览器/仓库；DSH 使用本机已登录的 opencode-go-2 配置。</p>
+            </details>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>本地评测 / Python</h3><span id="python-check-status" class="badge muted">未检测</span></div>
+        <div class="grid-2 tight">
+          <label>Python 解释器（本地评测 & CodeBERT 运行时）
+            <input id="settings-judge-python" placeholder="留空自动查找；例如 /usr/bin/python3">
+          </label>
+          <label>默认并发数（1–32）
+            <input id="settings-default-workers" type="number" value="4" min="1" max="32" step="1">
+          </label>
+        </div>
+        <div class="form-actions compact">
+          <button id="btn-python-check" class="btn ghost small" type="button">检测解释器</button>
+          <span class="hint small">打包版没有内置 Python；自动查找系统 Python 3。文件存在即可，实际导入的包由该环境决定。</span>
+        </div>
+        <div id="python-check-detail" class="hint small"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>CodeBERT 模型（可选，不随安装包分发）</h3><span id="codebert-status" class="badge muted">未检测</span></div>
+        <div class="grid-2 tight">
+          <label>模型名或本地路径
+            <input id="settings-codebert-model" placeholder="microsoft/codebert-base 或 /path/to/model">
+          </label>
+          <label>模型缓存目录
+            <input id="settings-codebert-cache" placeholder="留空使用数据目录/data/codebert">
+          </label>
+        </div>
+        <div class="form-actions compact">
+          <button id="btn-codebert-check" class="btn ghost small" type="button">检测模型</button>
+          <button id="btn-codebert-download" class="btn ghost small" type="button">下载模型到本机</button>
+        </div>
+        <div id="codebert-detail" class="hint small"></div>
+        <p class="hint small">模型下载到本机数据目录，绝不写入安装包。普通查重不需要模型；勾选「CodeBERT 语义相似度」后才会对最强候选对计算。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>本机环境检测</h3><span id="env-check-time" class="muted small"></span></div>
+        <div id="env-results" class="env-results hint small">点击“自动检测本机环境”查找 Python / torch / transformers、已有 CodeBERT 模型和 DSH。</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>数据与报告</h3></div>
+        <p class="hint">数据目录由服务端 <code>OJS_DATA_DIR</code> 或桌面应用决定；学生数据不会上传。完整报告导出在「概览 → 报告与导出」。</p>
+        <div class="form-actions">
+          <button id="btn-settings-export" class="btn primary" type="button">导出完整报告…</button>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer class="footer">
@@ -561,5 +630,33 @@
   </aside>
 
   <script src="/static/app.js" defer></script>
+
+  <dialog id="export-dialog" class="export-dialog">
+    <form method="dialog" class="export-form">
+      <div class="card-head">
+        <h3>导出完整查重与异常报告</h3>
+        <button id="btn-export-close" class="icon-btn" type="submit" aria-label="关闭">✕</button>
+      </div>
+      <p class="hint">导出内容：完整 HTML 报告、analysis.json、final_scores.csv、pairs.csv、anomalies.csv；可选 PDF 和 AI 详细解释。压缩包完全在本机生成。</p>
+      <div class="export-options">
+        <label class="check"><input id="export-pdf" type="checkbox" checked> 生成 PDF（中文排版，含理由/证据/异常/AI 解释）</label>
+        <label class="check"><input id="export-ai" type="checkbox"> 调用 AI 生成详细解释（DSH，可能需数分钟）</label>
+        <div class="grid-2 tight">
+          <label>最多导出可疑对 <input id="export-top-pairs" type="number" value="30" min="1" max="300"></label>
+          <label>AI 复核对数 <input id="export-ai-pairs" type="number" value="3" min="1" max="20"></label>
+        </div>
+      </div>
+      <div id="export-progress-wrap" class="batch-progress hidden">
+        <div class="batch-progress-head"><span id="export-progress-text">准备中…</span><span id="export-progress-percent">0%</span></div>
+        <div class="progress"><div id="export-progress-bar" class="progress-bar" style="width:0%"></div></div>
+      </div>
+      <div id="export-log" class="job-log hidden"></div>
+      <div class="form-actions">
+        <button id="btn-export-start" class="btn primary" type="button">开始导出并选择保存位置</button>
+        <button id="btn-export-cancel" class="btn ghost" type="button">关闭</button>
+      </div>
+    </form>
+  </dialog>
+
 </body>
 </html>
