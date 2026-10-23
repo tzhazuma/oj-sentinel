@@ -167,6 +167,11 @@ jobs:
       - name: Point Gradle at the SDK
         working-directory: android
         run: printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+      - name: Stage Android version from package version
+        run: |
+          VERSION="$(python -c 'import sys; sys.path.insert(0, "src"); from oj_sentinel.desktop import package_version; print(package_version())')"
+          CODE="$(python -c 'import sys; p=[int(x) for x in sys.argv[1].split(".")]; print(p[0]*10000+p[1]*100+p[2])' "$VERSION")"
+          python -c 'import pathlib,re,sys; p=pathlib.Path("android/app/build.gradle.kts"); t=p.read_text(); t=re.sub(r"versionCode = \d+", "versionCode = "+sys.argv[2], t); t=re.sub(r"versionName = \"[^\"]+\"", "versionName = \""+sys.argv[1]+"\"", t); p.write_text(t); print(sys.argv[1], sys.argv[2])' "$VERSION" "$CODE"
       - name: Build debug APK
         working-directory: android
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
