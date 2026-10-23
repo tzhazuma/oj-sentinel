@@ -155,3 +155,9 @@ CI 矩阵新增 macOS x86_64、Linux arm64、Windows arm64；构建后运行无�
 - 根因：`review_pair` 的结构化结果位于 `ai.data`，导出只读顶层字段。
 - 修复：渲染前合并 `data`，AI 段落现在包含 verdict、confidence、summary、evidence。
 - 验证：用已有 `ai-explanations.json` 重新渲染，出现 `结论：plausible_plagiarism；置信度：0.99`；重新导出 ZIP 内容完整。
+
+## 12. v0.1.6 完整源码附件（2026-10-23）
+
+- 导出 ZIP 新增 `sources/`：每个可疑对双方完整源码（按 RID 去重），`sources/index.csv` 映射题目/RID/用户名/语言/分数/文件。
+- 实测 730 对导出包含 403 份源码，文件名形如 `sources/HW2001/HW2001__caizch2026__6ace...py`；ZIP 大小约 464 KB（无 PDF/AI）。
+- `README.md` 与 `manifest.json` 记录源码份数；ZIP 递归打包 `sources/`。

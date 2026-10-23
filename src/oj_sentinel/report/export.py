@@ -39,6 +39,63 @@ def _submission_code(snapshot_root: Path, rid: str) -> tuple[dict[str, Any], str
     return dict(summary), str(detail.get("code") or "")
 
 
+def _source_ext(summary: Mapping[str, Any], detail: Mapping[str, Any]) -> str:
+    lang = str(detail.get("language") or summary.get("language") or "").lower()
+    if "c++" in lang or "cpp" in lang:
+        return "cpp"
+    if lang.startswith("c") or lang == "c":
+        return "c"
+    if "java" in lang:
+        return "java"
+    if "python" in lang or lang.startswith("py"):
+        return "py"
+    return "txt"
+
+
+def _safe_part(value: Any) -> str:
+    text = str(value or "unknown")
+    return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in text)[:80]
+
+
+def _write_sources(snapshot_root: Path, pairs: list[Mapping[str, Any]], dest: Path) -> tuple[int, list[str]]:
+    """Write both full source files for every suspicious pair (deduplicated by RID)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    warnings: list[str] = []
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for pair in pairs:
+        for side in ("a", "b"):
+            rid = str(pair.get(f"rid_{side}") or "")
+            if not rid or rid in seen:
+                continue
+            seen.add(rid)
+            summary, code = _submission_code(snapshot_root, rid)
+            if not code:
+                warnings.append(f"缺少源码：{rid}")
+                continue
+            problem = _safe_part(pair.get("problem") or summary.get("problem_key") or "UNKNOWN")
+            username = _safe_part(pair.get(f"username_{side}") or summary.get("username") or "unknown")
+            payload = _read_json(Path(snapshot_root) / "submissions" / f"{rid}.json", {})
+            detail = payload.get("detail") if isinstance(payload.get("detail"), Mapping) else {}
+            ext = _source_ext(summary, detail)
+            name = f"{problem}__{username}__{_safe_part(rid)}.{ext}"
+            folder = dest / problem
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / name).write_text(code, encoding="utf-8")
+            rows.append({
+                "problem": pair.get("problem") or summary.get("problem_key") or "",
+                "rid": rid, "username": pair.get(f"username_{side}") or summary.get("username") or "",
+                "uid": summary.get("uid", ""), "language": summary.get("language", ""),
+                "score": summary.get("score", ""), "status": summary.get("status_text", ""),
+                "file": f"sources/{problem}/{name}", "code_chars": len(code),
+            })
+    with (dest / "index.csv").open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["problem", "rid", "username", "uid", "language", "score", "status", "file", "code_chars"])
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows), warnings
+
+
 def _pair_markdown(pair: Mapping[str, Any], ai: Mapping[str, Any] | None = None) -> str:
     lines = [
         f"## {pair.get('problem', '')} · {pair.get('username_a', '')} ↔ {pair.get('username_b', '')}",
@@ -309,7 +366,11 @@ def build_export(
             shutil.copy2(source_dir / "judge_batch.json", work / "judge_batch.json")
         if (source_dir / "judge_batch.csv").exists():
             shutil.copy2(source_dir / "judge_batch.csv", work / "judge_batch.csv")
-        _emit(on_event, "已收集 HTML/JSON/CSV")
+        source_count, source_warnings = _write_sources(
+            Path(snapshot_root), list(analysis.get("pairs") or []), work / "sources"
+        )
+        warnings.extend(source_warnings)
+        _emit(on_event, f"已收集 HTML/JSON/CSV 与 {source_count} 份完整源码")
 
         pairs = list(analysis.get("pairs") or [])
         ai_text = ""
@@ -342,6 +403,7 @@ def build_export(
             "- final_scores.csv：每生每题最后一次提交得分",
             "- pairs.csv：可疑对指标与理由",
             "- anomalies.csv：异常行为线索",
+            f"- sources/：可疑对双方的完整源码文件（{source_count} 份），index.csv 为映射表",
         ]
         if include_pdf:
             summary.append("- report.pdf：详细 PDF（含理由、证据、异常与 AI 解释）")
@@ -351,7 +413,7 @@ def build_export(
         (work / "manifest.json").write_text(json.dumps({
             "schema_version": 1, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "homework_id": analysis.get("homework_id"), "title": analysis.get("title"),
-            "files": [], "warnings": warnings,
+            "files": [], "source_files": source_count, "warnings": warnings,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
         if include_pdf:
@@ -371,9 +433,9 @@ def build_export(
 
         zip_path = out_dir / f"OJ-Sentinel-report-{stamp}.zip"
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for item in sorted(work.iterdir()):
+            for item in sorted(work.rglob("*")):
                 if item.is_file():
-                    zf.write(item, arcname=item.name)
+                    zf.write(item, arcname=str(item.relative_to(work)))
         _emit(on_event, f"导出压缩包：{zip_path.name}")
         return {
             "path": str(zip_path),

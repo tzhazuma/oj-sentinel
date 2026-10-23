@@ -55,7 +55,7 @@ try:  # keep /api/health in sync with the package/build version
 
     VERSION = _package_version()
 except Exception:  # pragma: no cover - minimal source checkout
-    VERSION = "0.1.5"
+    VERSION = "0.1.6"
 COOKIE_NAME = "ojs_session"
 SESSION_TTL = 8 * 60 * 60  # 8 hours, absolute
 LOG_CAP = 500
