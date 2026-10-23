@@ -14,8 +14,8 @@ android {
         applicationId = "com.ojsentinel.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 6
+        versionName = "0.1.6"
         // The OJ Sentinel server runs on a computer (desktop). 10.0.2.2 is the
         // Android emulator alias for the host loopback; the default remains the
         // documented 127.0.0.1 and is editable in the settings screen.

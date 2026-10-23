@@ -8,7 +8,7 @@ Web GUI 装进 WebView。查重、异常分析、评分、AI 全部在电脑端�
 - 包名：`com.ojsentinel.app`
 - 最低系统：Android 8.0（API 26），targetSdk 35
 - 依赖：仅 Android Framework + Kotlin 标准库（无 AndroidX、无第三方 UI 库、无外部 CDN）
-- 本地已构建产物：`dist/OJ-Sentinel-0.1.0-android-debug.apk`（约 840 KB，debug 签名）
+- 本地已构建产物：`dist/OJ-Sentinel-0.1.6-android-debug.apk`（约 840 KB，debug 签名）
 
 ## 1. 本机构建（macOS arm64，已验证）
 
@@ -35,7 +35,7 @@ printf 'sdk.dir=%s\n' "$HOME/Library/Android/sdk" > local.properties
 # 产物：android/app/build/outputs/apk/debug/app-debug.apk
 mkdir -p ../dist
 cp app/build/outputs/apk/debug/app-debug.apk \
-   ../dist/OJ-Sentinel-0.1.0-android-debug.apk
+   ../dist/OJ-Sentinel-0.1.6-android-debug.apk
 ```
 
 首次运行 `./gradlew` 会下载 Gradle 8.12 与 AGP/Kotlin 依赖（需要网络；本机已有
@@ -45,24 +45,24 @@ cp app/build/outputs/apk/debug/app-debug.apk \
 
 ```bash
 AAPT="$HOME/Library/Android/sdk/build-tools/36.0.0/aapt"
-"$AAPT" dump badging ../dist/OJ-Sentinel-0.1.0-android-debug.apk | head -20
+"$AAPT" dump badging ../dist/OJ-Sentinel-0.1.6-android-debug.apk | head -20
 
 # 期望：
-# package: name='com.ojsentinel.app' versionCode='1' versionName='0.1.0'
+# package: name='com.ojsentinel.app' versionCode='6' versionName='0.1.6'
 # sdkVersion:'26'
 # targetSdkVersion:'35'
 # launchable-activity: name='com.ojsentinel.app.MainActivity'
 # usesCleartextTraffic 为 true（见 AndroidManifest.xml / network_security_config.xml）
 
 "$HOME/Library/Android/sdk/build-tools/36.0.0/apksigner" verify \
-  --print-certs ../dist/OJ-Sentinel-0.1.0-android-debug.apk
+  --print-certs ../dist/OJ-Sentinel-0.1.6-android-debug.apk
 # Signer #1 certificate DN: C=US, O=Android, CN=Android Debug
 ```
 
 ### 安装
 
 ```bash
-adb install -r dist/OJ-Sentinel-0.1.0-android-debug.apk
+adb install -r dist/OJ-Sentinel-0.1.6-android-debug.apk
 adb shell am start -n com.ojsentinel.app/.MainActivity
 ```
 
@@ -73,7 +73,7 @@ sdk_gphone64_arm64 / API 36）：
 2. 启动后 uiautomator dump 可见完整设置页与 服务器/查重/异常/评分/AI 五个标签；
 3. `adb reverse tcp:8765 tcp:59442` + 桌面服务 `--no-window --port 59442`，
    点击「测试连接」后状态栏显示
-   `服务器在线 · {"status":"ok","app":"oj-sentinel","version":"0.1.0",...}`；
+   `服务器在线 · {"status":"ok","app":"oj-sentinel","version":"0.1.6",...}`；
 4. 点击「打开 Web GUI」后 UI 中出现 `android.webkit.WebView`，Activity 保持前台；
 5. 返回键回到「连接设置」页；
 6. AI 标签正确显示「未检测到 dsh-android」及安装说明（模拟器未安装 companion）。
@@ -86,12 +86,12 @@ sdk_gphone64_arm64 / API 36）：
 设备：`192.0.2.10:41129`（adb over Wi-Fi），型号 PA2573，Android 16，
 arm64-v8a。
 
-1. `adb install -r dist/OJ-Sentinel-0.1.0-android-debug.apk` → `Success`；
+1. `adb install -r dist/OJ-Sentinel-0.1.6-android-debug.apk` → `Success`；
 2. 电脑端启动 `python -m oj_sentinel.desktop --no-window --host 0.0.0.0 --port 18876`，
    手机与 Mac 同一 Wi-Fi；
 3. App 服务器地址填 `http://192.0.2.11:18876`（Mac 局域网 IP），
    点「测试连接」→ 状态栏显示
-   `服务器在线 · {"status":"ok","app":"oj-sentinel","version":"0.1.0","snapshots":1,...}`；
+   `服务器在线 · {"status":"ok","app":"oj-sentinel","version":"0.1.6","snapshots":1,...}`；
 4. 点「打开 Web GUI（无需重新登录）」→ `android.webkit.WebView` 占满内容区，
    Activity 保持前台，成功加载本地已有快照/报告（无需登录 OJ）。
 
