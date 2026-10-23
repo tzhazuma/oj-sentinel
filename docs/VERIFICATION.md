@@ -148,3 +148,10 @@ CI 矩阵新增 macOS x86_64、Linux arm64、Windows arm64；构建后运行无�
   - 桌面 App 数据目录（1000 对）重新导出：ZIP 2.5 MB，`report.html` 存在，warning 0。
   - 完整快照导出：730 对 / 13 簇 / 76 异常，HTML 4.6 MB，`final_scores.csv` 62 KB，`pairs.csv` 223 KB，`anomalies.csv` 27 KB，PDF 34 KB，AI 解释与 ai-trace 各一份。
   - 最终完整包：`~/Downloads/OJ-Sentinel-report-20261023-184508.zip`（11 个文件）。
+
+## 11. v0.1.5 AI 解释修复（2026-10-23）
+
+- 现象：导出的 `ai-explanations.md` 只有“结论：；置信度：”，AI 摘要/证据为空；原始 JSON 中实际有完整数据。
+- 根因：`review_pair` 的结构化结果位于 `ai.data`，导出只读顶层字段。
+- 修复：渲染前合并 `data`，AI 段落现在包含 verdict、confidence、summary、evidence。
+- 验证：用已有 `ai-explanations.json` 重新渲染，出现 `结论：plausible_plagiarism；置信度：0.99`；重新导出 ZIP 内容完整。

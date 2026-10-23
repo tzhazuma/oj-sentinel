@@ -113,6 +113,10 @@ def _build_ai_section(
             data = result.to_dict() if hasattr(result, "to_dict") else result
             if not isinstance(data, Mapping):
                 data = {"summary": str(data)}
+            else:
+                parsed = data.get("data")
+                if isinstance(parsed, Mapping):
+                    data = {**data, **parsed}
         except Exception as exc:  # noqa: BLE001
             data = {"verdict": "复核失败", "confidence": None,
                     "summary": f"{type(exc).__name__}: {exc}", "evidence": []}
