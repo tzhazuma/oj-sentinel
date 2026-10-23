@@ -30,6 +30,8 @@ class TraceCall:
     parsed: Any = None
     error: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
+    stream_text: str = ""
+    stream_events: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -47,6 +49,8 @@ class TraceCall:
             "parsed": self.parsed,
             "error": self.error,
             "usage": self.usage,
+            "stream_text": self.stream_text,
+            "stream_events": self.stream_events[-200:],
         }
 
 
@@ -56,6 +60,8 @@ class TraceRecorder:
     meta: dict[str, Any] = field(default_factory=dict)
     calls: list[TraceCall] = field(default_factory=list)
     started_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+    done: bool = False
+    on_event: Any | None = None
 
     def wrap(self, agent: Agent) -> "TracedAgent":
         return TracedAgent(agent, self)
@@ -65,6 +71,7 @@ class TraceRecorder:
             "task": self.task,
             "meta": self.meta,
             "started_at": self.started_at,
+            "done": self.done,
             "calls": [c.to_dict() for c in self.calls],
         }
 
@@ -96,12 +103,28 @@ class TracedAgent(Agent):
             system=str(system or ""),
             json_schema=json_schema,
         )
+        self.recorder.calls.append(call)
+
+        def handle_stream(event: dict[str, Any]) -> None:
+            call.stream_events.append(event)
+            if event.get("type") == "text" and event.get("text"):
+                call.stream_text += str(event.get("text"))
+            if self.recorder.on_event is not None:
+                try:
+                    self.recorder.on_event(event)
+                except Exception:  # noqa: BLE001
+                    pass
+
         try:
-            result = self.inner.complete(prompt, system=system, json_schema=json_schema)
+            try:
+                result = self.inner.complete(
+                    prompt, system=system, json_schema=json_schema, on_stream=handle_stream
+                )
+            except TypeError:
+                result = self.inner.complete(prompt, system=system, json_schema=json_schema)
         except Exception as exc:  # noqa: BLE001 - record and re-raise
             call.duration_ms = int((time.perf_counter() - started) * 1000)
             call.error = f"{type(exc).__name__}: {exc}"
-            self.recorder.calls.append(call)
             raise
         call.duration_ms = int((time.perf_counter() - started) * 1000)
         call.provider = str(getattr(result, "provider", "") or "")
@@ -112,7 +135,6 @@ class TracedAgent(Agent):
         call.error = getattr(result, "error", None)
         call.usage = getattr(result, "usage", {}) or {}
         call.ok = call.error is None
-        self.recorder.calls.append(call)
         return result
 
 

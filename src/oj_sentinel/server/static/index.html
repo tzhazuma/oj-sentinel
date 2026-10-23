@@ -601,7 +601,15 @@
 
       <div class="card">
         <div class="card-head"><h3>数据与报告</h3></div>
-        <p class="hint">数据目录由服务端 <code>OJS_DATA_DIR</code> 或桌面应用决定；学生数据不会上传。完整报告导出在「概览 → 报告与导出」。</p>
+        <p class="hint">数据目录由服务端 <code>OJS_DATA_DIR</code> 或桌面应用决定；学生数据不会上传。</p>
+        <label>默认导出位置
+          <input id="settings-export-dir" placeholder="留空使用数据目录/exports；桌面版建议选择本机文件夹">
+        </label>
+        <div class="form-actions compact">
+          <button id="btn-export-dir-choose" class="btn ghost small" type="button">选择导出文件夹…</button>
+          <span id="export-dir-status" class="badge muted">未选择</span>
+        </div>
+        <p class="hint small">桌面应用通过系统原生文件夹选择器选择；导出 ZIP 会直接写入该目录。浏览器无法读取本机绝对路径时，会在导出完成后使用浏览器下载位置。</p>
         <div class="form-actions">
           <button id="btn-settings-export" class="btn primary" type="button">导出完整报告…</button>
         </div>
@@ -646,6 +654,7 @@
           <label>AI 复核对数 <input id="export-ai-pairs" type="number" value="3" min="1" max="20"></label>
         </div>
       </div>
+      <p id="export-destination" class="hint small">导出位置：默认数据目录/exports</p>
       <div id="export-progress-wrap" class="batch-progress hidden">
         <div class="batch-progress-head"><span id="export-progress-text">准备中…</span><span id="export-progress-percent">0%</span></div>
         <div class="progress"><div id="export-progress-bar" class="progress-bar" style="width:0%"></div></div>

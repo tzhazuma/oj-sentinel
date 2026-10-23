@@ -55,11 +55,13 @@ try:  # keep /api/health in sync with the package/build version
 
     VERSION = _package_version()
 except Exception:  # pragma: no cover - minimal source checkout
-    VERSION = "0.1.2"
+    VERSION = "0.1.3"
 COOKIE_NAME = "ojs_session"
 SESSION_TTL = 8 * 60 * 60  # 8 hours, absolute
 LOG_CAP = 500
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+LIVE_TRACES: dict[str, Any] = {}
+LIVE_TRACE_LIMIT = 40
 
 # Only these files may be served by /api/report/{domain}/{hid}/{name}.
 REPORT_WHITELIST = (
@@ -1080,6 +1082,7 @@ class AIReviewRequest(BaseModel):
     hid: str
     rid_a: str
     rid_b: str
+    trace_id: str = ""
     options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1138,6 +1141,7 @@ class ExportRequest(BaseModel):
     include_ai: bool = False
     ai_max_pairs: int = 3
     top_pairs: int = 30
+    save_dir: str = ""
     options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1159,6 +1163,7 @@ class ProjectEvaluateRequest(BaseModel):
     description: str = ""
     rubric: str = ""
     files: list[ProjectFile] = Field(default_factory=list)
+    trace_id: str = ""
     options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1305,13 +1310,17 @@ def _build_agent(options: dict[str, Any] | None = None) -> tuple[Any | None, str
     return None, "oj_sentinel.ai.agent 未提供 Agent/工厂函数"
 
 
-def _trace_agent(agent: Any, task: str, meta: dict[str, Any]) -> tuple[Any, Any]:
+def _trace_agent(agent: Any, task: str, meta: dict[str, Any], trace_id: str = "") -> tuple[Any, Any]:
     module, _ = _import_optional("oj_sentinel.ai.trace")
     recorder_class = getattr(module, "TraceRecorder", None) if module else None
     if not callable(recorder_class):
         return agent, None
     try:
         recorder = recorder_class(task=task, meta=meta)
+        if trace_id:
+            LIVE_TRACES[trace_id] = recorder
+            while len(LIVE_TRACES) > LIVE_TRACE_LIMIT:
+                LIVE_TRACES.pop(next(iter(LIVE_TRACES)), None)
         return recorder.wrap(agent), recorder
     except Exception:  # noqa: BLE001 - tracing must never break AI calls
         return agent, None
@@ -1321,6 +1330,7 @@ def _finish_trace(context: ServerContext, data: dict[str, Any], recorder: Any) -
     if recorder is None:
         return
     try:
+        recorder.done = True
         trace = recorder.to_dict()
         path = recorder.save(context.data_dir / "ai-traces")
         trace["path"] = str(path)
@@ -2077,6 +2087,17 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
         return JSONResponse(status_code=202, content=context.jobs.get(job.id) or {})
 
     # -- AI review / judge -------------------------------------------------
+    @app.get("/api/ai/live/{trace_id}", tags=["ai"])
+    def ai_live(trace_id: str):
+        """Poll partial streaming text for an in-flight AI call."""
+        recorder = LIVE_TRACES.get(trace_id)
+        if recorder is None:
+            raise HTTPException(status_code=404, detail="没有这个 AI 调用")
+        try:
+            return recorder.to_dict()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=_short(exc))
+
     @app.post("/api/ai/dsh/check", tags=["ai"])
     def dsh_check(payload: DshCheckRequest):
         """Probe a dsh path (or auto-discover) and return a version report.
@@ -2180,7 +2201,7 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
             )
         agent, trace = _trace_agent(agent, "pair_review", {
             "domain": domain, "hid": hid, "rid_a": payload.rid_a, "rid_b": payload.rid_b,
-        })
+        }, payload.trace_id)
         sub_a = _submission_object(sub_a_payload, hid)
         sub_b = _submission_object(sub_b_payload, hid)
         try:
@@ -2261,7 +2282,7 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
         agent, trace = _trace_agent(agent, "project_evaluate", {
             "title": payload.title, "student": payload.student,
             "files": [f.name for f in payload.files],
-        })
+        }, payload.trace_id)
         assignment = {
             "title": payload.title,
             "description": payload.description,
@@ -2715,7 +2736,22 @@ def _register_routes(app: FastAPI, context: ServerContext) -> None:
         build = getattr(module, "build_export", None) if module else None
         if not callable(build):
             return JSONResponse(status_code=501, content={"error": "导出模块尚未就绪", "detail": error})
-        export_dir = context.data_dir / "exports" / domain / hid
+        if payload.save_dir:
+            try:
+                export_dir = Path(payload.save_dir).expanduser().resolve()
+                export_dir.mkdir(parents=True, exist_ok=True)
+                if not export_dir.is_dir():
+                    raise NotADirectoryError(str(export_dir))
+                probe = export_dir / ".ojs-write-test"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink(missing_ok=True)
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": f"导出位置不可用：{export_dir if 'export_dir' in locals() else payload.save_dir}", "detail": _short(exc)},
+                )
+        else:
+            export_dir = context.data_dir / "exports" / domain / hid
         job = context.jobs.create("export", f"导出报告 {domain}/{hid}")
 
         def on_event(message: Any) -> None:

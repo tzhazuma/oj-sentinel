@@ -42,3 +42,17 @@ def test_desktop_save_cancel(tmp_path, monkeypatch):
 
     monkeypatch.setitem(sys.modules, "webview", types.SimpleNamespace(windows=[CancelWindow()], SAVE_DIALOG=30))
     assert DesktopApi().save_bytes("x.zip", base64.b64encode(b"x").decode()) == ""
+
+
+def test_desktop_choose_directory(tmp_path, monkeypatch):
+    class FolderWindow:
+        def create_file_dialog(self, dialog_type, **kwargs):
+            assert kwargs.get("allow_multiple") is False
+            return [str(tmp_path)]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "webview",
+        types.SimpleNamespace(windows=[FolderWindow()], FOLDER_DIALOG=20),
+    )
+    assert DesktopApi().choose_directory() == str(tmp_path)

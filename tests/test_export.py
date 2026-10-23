@@ -76,3 +76,25 @@ def test_external_codebert_status_rejects_missing(tmp_path):
     status = embedder.status()
     assert status.available is False
     assert status.reason
+
+
+class _StreamingAgent:
+    config = None
+
+    def complete(self, prompt, *, system=None, json_schema=None, on_stream=None):
+        from oj_sentinel.ai.agent import AgentResult
+        if on_stream:
+            on_stream({"type": "text", "text": "hello "})
+            on_stream({"type": "text", "text": "world"})
+            on_stream({"type": "final", "text": "hello world"})
+        return AgentResult(text="hello world", data=None, provider="fake", model="fake")
+
+
+def test_trace_stream_text_is_live_capable():
+    recorder = TraceRecorder(task="stream")
+    agent = recorder.wrap(_StreamingAgent())
+    result = agent.complete("x")
+    assert result.text == "hello world"
+    call = recorder.to_dict()["calls"][0]
+    assert call["stream_text"] == "hello world"
+    assert len(call["stream_events"]) == 3

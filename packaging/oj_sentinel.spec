@@ -39,7 +39,7 @@ try:
 
     VERSION = package_version()
 except Exception:  # pragma: no cover - collection must never fail the build
-    VERSION = "0.1.2"
+    VERSION = "0.1.3"
 
 
 def _package_data() -> list[tuple[str, str]]:

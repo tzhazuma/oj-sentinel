@@ -43,7 +43,7 @@ APP_NAME = "OJ Sentinel"
 APP_SLUG = "oj-sentinel"
 DEFAULT_HOST = "127.0.0.1"
 HEALTH_PATH = "/api/health"
-_FALLBACK_VERSION = "0.1.2"
+_FALLBACK_VERSION = "0.1.3"
 
 LOG = logging.getLogger("oj_sentinel.desktop")
 
@@ -306,7 +306,34 @@ def setup_logging(data_dir: Path, level: str = "info") -> None:
 
 
 class DesktopApi:
-    """Small JS bridge used by the Web GUI for native save dialogs."""
+    """Small JS bridge used by the Web GUI for native save/folder dialogs."""
+
+    def choose_directory(self) -> str:
+        """Native folder picker for the default report export location."""
+        try:
+            import webview
+        except ImportError:
+            return ""
+        if not webview.windows:
+            return ""
+        dialog = getattr(webview, "FOLDER_DIALOG", None)
+        if dialog is None:
+            try:
+                dialog = webview.FileDialog.FOLDER
+            except Exception:  # noqa: BLE001
+                return ""
+        try:
+            selected = webview.windows[0].create_file_dialog(
+                dialog,
+                directory=str(Path.home()),
+                allow_multiple=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("folder dialog failed: %s", exc)
+            return ""
+        if not selected:
+            return ""
+        return str(selected[0] if not isinstance(selected, str) else selected)
 
     def save_bytes(self, filename: str, data_base64: str) -> str:
         """Ask the native window for a save path and write the ZIP there."""

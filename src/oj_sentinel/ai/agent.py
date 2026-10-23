@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -331,6 +332,7 @@ class DshAgent(Agent):
         *,
         system: str | None = None,
         json_schema: dict[str, Any] | None = None,
+        on_stream: Callable[[dict[str, Any]], None] | None = None,
     ) -> AgentResult:
         cfg = self.config
         composed = _compose_prompt(prompt, system, json_schema)
@@ -358,13 +360,19 @@ class DshAgent(Agent):
                 cfg.dsh_profile or DEFAULT_DSH_PROFILE,
                 "--patch",
                 str(overlay_path),
-                "-",
             ]
+            if on_stream is not None:
+                command.append("--json")
+            command.append("-")
             self.last_command = list(command)
             try:
                 if self._runner is not None:
                     returncode, stdout, stderr = self._runner(
                         command, composed, cfg.timeout
+                    )
+                elif on_stream is not None:
+                    returncode, stdout, stderr = self._run_streaming(
+                        command, composed, cfg.timeout, on_stream
                     )
                 else:
                     proc = subprocess.run(
@@ -425,6 +433,72 @@ class DshAgent(Agent):
         )
 
     # -- internals ------------------------------------------------------
+    def _run_streaming(
+        self,
+        command: list[str],
+        prompt: str,
+        timeout: float,
+        on_stream: Callable[[dict[str, Any]], None],
+    ) -> tuple[int, str, str]:
+        """Run dsh --json and forward each newline-delimited event immediately."""
+        proc = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=os.environ.copy(),
+        )
+        chunks: list[str] = []
+        final_text = ""
+        stderr_lines: list[str] = []
+
+        def read_stdout() -> None:
+            nonlocal final_text
+            assert proc.stdout is not None
+            for raw in proc.stdout:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    event = {"type": "raw", "text": line}
+                if not isinstance(event, dict):
+                    event = {"type": "raw", "text": str(event)}
+                if event.get("type") == "text" and event.get("text"):
+                    chunks.append(str(event.get("text")))
+                if event.get("type") == "final" and event.get("text"):
+                    final_text = str(event.get("text"))
+                try:
+                    on_stream(event)
+                except Exception:  # noqa: BLE001 - UI callback must not kill dsh
+                    pass
+
+        def read_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stderr_lines.append(line)
+
+        out_thread = threading.Thread(target=read_stdout, name="dsh-stream-out", daemon=True)
+        err_thread = threading.Thread(target=read_stderr, name="dsh-stream-err", daemon=True)
+        out_thread.start()
+        err_thread.start()
+        try:
+            if proc.stdin is not None:
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            rc = -9
+            stderr_lines.append(f"dsh timed out after {float(timeout):.0f}s")
+        out_thread.join(timeout=5)
+        err_thread.join(timeout=5)
+        text = final_text or "".join(chunks)
+        return rc, text, "".join(stderr_lines)
+
     def _fallback_agent(self) -> Agent | None:
         if self.fallback is not None:
             return self.fallback

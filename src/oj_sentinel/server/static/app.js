@@ -2015,20 +2015,54 @@
     toast(decision ? `已标记为「${DECISION_LABELS[decision] || decision}」（仅本地）` : '已清除本地人工判定。', 'success', 3000);
   }
 
+  function newTraceId(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function startAiLive(container, traceId, label) {
+    container.innerHTML = '';
+    const head = el('p', 'hint', `${label}：正在实时接收 AI 输出…`);
+    const pre = el('pre', 'ai-live-pre');
+    container.appendChild(head);
+    container.appendChild(pre);
+    let stopped = false;
+    const timer = window.setInterval(async () => {
+      if (stopped) return;
+      try {
+        const live = await api(`/api/ai/live/${encodeURIComponent(traceId)}`);
+        const calls = toArray(live.calls);
+        const last = calls[calls.length - 1] || {};
+        const events = toArray(last.stream_events);
+        const status = events.filter((e) => e && e.type === 'status').slice(-1)[0];
+        const phase = status && status.phase ? `阶段：${status.phase}` : '等待模型输出…';
+        head.textContent = `${label}：${phase}${live.done ? ' · 已结束' : ''}`;
+        pre.textContent = last.stream_text || (events.length ? JSON.stringify(events.slice(-4), null, 2) : '');
+        pre.scrollTop = pre.scrollHeight;
+      } catch (_) { /* endpoint may appear only after the request registers */ }
+    }, 600);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }
+
   async function runAiReview(pair, button, container) {
     const snapshot = currentSnapshot();
     if (!snapshot) return;
     button.disabled = true;
     button.classList.add('loading');
     button.textContent = 'AI 复核中…';
-    container.innerHTML = '<p class="hint">正在等待 AI 返回（可能较慢）…</p>';
+    const traceId = newTraceId('review');
+    const stopLive = startAiLive(container, traceId, 'AI 复核');
     try {
       const data = await api('/api/ai/review', {
         method: 'POST',
-        body: { domain: snapshot.domain, hid: snapshot.hid, rid_a: pair.rid_a, rid_b: pair.rid_b, options: aiOptions() },
+        body: {
+          domain: snapshot.domain, hid: snapshot.hid, rid_a: pair.rid_a, rid_b: pair.rid_b,
+          trace_id: traceId, options: aiOptions(),
+        },
       });
+      stopLive();
       renderAiResult(container, data);
     } catch (error) {
+      stopLive();
       container.innerHTML = '';
       const notice = el('div', 'notice danger');
       const text = error.data && typeof error.data === 'object' ? error.data : {};
@@ -2600,6 +2634,7 @@
     if ($('#settings-default-workers') && saved.default_workers) $('#settings-default-workers').value = saved.default_workers;
     if ($('#settings-codebert-model') && saved.codebert_model) $('#settings-codebert-model').value = saved.codebert_model;
     if ($('#settings-codebert-cache') && saved.codebert_cache) $('#settings-codebert-cache').value = saved.codebert_cache;
+    if ($('#settings-export-dir') && saved.export_dir) $('#settings-export-dir').value = saved.export_dir;
     if ($('#analysis-codebert-model') && saved.codebert_model) $('#analysis-codebert-model').value = saved.codebert_model;
     if ($('#batch-workers') && saved.default_workers) $('#batch-workers').value = saved.default_workers;
   }
@@ -2610,6 +2645,7 @@
       default_workers: $('#settings-default-workers')?.value || '4',
       codebert_model: $('#settings-codebert-model')?.value?.trim() || $('#analysis-codebert-model')?.value?.trim() || 'microsoft/codebert-base',
       codebert_cache: $('#settings-codebert-cache')?.value?.trim() || '',
+      export_dir: $('#settings-export-dir')?.value?.trim() || '',
     };
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload)); } catch (_) { /* private mode */ }
     if ($('#analysis-codebert-model') && payload.codebert_model) $('#analysis-codebert-model').value = payload.codebert_model;
@@ -2632,6 +2668,33 @@
 
   function codebertCache() {
     return $('#settings-codebert-cache')?.value?.trim() || '';
+  }
+
+  function exportDir() {
+    return $('#settings-export-dir')?.value?.trim() || '';
+  }
+
+  async function chooseExportDir() {
+    const status = $('#export-dir-status');
+    if (window.pywebview?.api?.choose_directory) {
+      try {
+        const path = await window.pywebview.api.choose_directory();
+        if (path) {
+          if ($('#settings-export-dir')) $('#settings-export-dir').value = path;
+          if (status) { status.textContent = '已选择'; status.className = 'badge ok'; }
+          saveLocalSettings();
+          return path;
+        }
+        if (status) { status.textContent = '已取消'; status.className = 'badge muted'; }
+        return '';
+      } catch (error) {
+        toast(`系统文件夹选择器失败：${errorMessage(error)}`, 'error');
+      }
+    }
+    if (status) { status.textContent = '浏览器不可用，请手动输入'; status.className = 'badge warn'; }
+    $('#settings-export-dir')?.focus();
+    toast('当前环境没有原生文件夹选择器；可直接输入本机绝对路径（桌面版支持原生选择）。', 'warn', 7000);
+    return '';
   }
 
   function aiOptions() {
@@ -2787,7 +2850,8 @@
     const badge = $('#project-result-badge');
     badge.textContent = '评测中…';
     badge.className = 'badge warn';
-    container.innerHTML = '<p class="hint">正在整理文件并请求 AI 评测，请稍候…</p>';
+    const traceId = newTraceId('project');
+    const stopLive = startAiLive(container, traceId, 'AI 作品评测');
     try {
       const files = await collectProjectFiles();
       const snapshot = currentSnapshot();
@@ -2799,13 +2863,16 @@
         description,
         rubric,
         files,
+        trace_id: traceId,
         options: aiOptions(),
       };
       const data = await api('/api/ai/evaluate-project', { method: 'POST', body: payload });
+      stopLive();
       state.projectResult = { data, title, student };
       renderProjectResult(state.projectResult);
       toast('AI 作品评测完成，请人工复核分数。', 'success');
     } catch (error) {
+      stopLive();
       container.innerHTML = '';
       const data = error.data && typeof error.data === 'object' ? error.data : {};
       const notice = el('div', `notice ${error.status === 501 ? 'info' : 'danger'}`);
@@ -3033,6 +3100,7 @@
     });
     $('#btn-codebert-check')?.addEventListener('click', () => checkCodebert());
     $('#btn-codebert-download')?.addEventListener('click', () => downloadCodebert());
+    $('#btn-export-dir-choose')?.addEventListener('click', () => chooseExportDir());
     $('#btn-settings-save')?.addEventListener('click', () => saveLocalSettings());
     $('#btn-env-detect')?.addEventListener('click', () => detectEnvironment());
     $('#btn-python-check')?.addEventListener('click', () => checkPython());
@@ -3058,6 +3126,7 @@
     if (!dialog) return;
     if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.classList.remove('hidden');
     if ($('#export-log')) { $('#export-log').classList.add('hidden'); $('#export-log').textContent = ''; }
+    if ($('#export-destination')) $('#export-destination').textContent = `导出位置：${exportDir() || '默认数据目录/exports'}`;
     if ($('#export-progress-wrap')) $('#export-progress-wrap').classList.add('hidden');
     if ($('#btn-export-start')) $('#btn-export-start').disabled = false;
   }
@@ -3134,6 +3203,7 @@
           include_ai: includeAi,
           top_pairs: topPairs,
           ai_max_pairs: aiPairs,
+          save_dir: exportDir(),
           options: aiOptions(),
         },
       });
@@ -3149,6 +3219,14 @@
         if (['failed', 'cancelled'].includes(current.status)) throw new Error(current.error || '导出失败');
       }
       if (!done) throw new Error('导出超时');
+      const savedPath = done.result && done.result.path;
+      if (exportDir() && savedPath) {
+        setProgress(100, '已保存');
+        toast(`完整报告已保存到：${savedPath}`, 'success', 9000);
+        if ($('#export-log')) $('#export-log').textContent += `\n已保存：${savedPath}`;
+        return;
+      }
+      if ($('#export-destination')) $('#export-destination').textContent = `导出位置：${exportDir() || '默认数据目录/exports'}`;
       setProgress(100, '下载压缩包…');
       const response = await fetch(`/api/report/export/${jobId}/download`);
       if (!response.ok) throw new Error(`下载导出文件失败：HTTP ${response.status}`);

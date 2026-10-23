@@ -699,3 +699,7 @@ details > summary:hover { color: var(--text); }
 .ai-trace-title { font-weight: 600; font-size: 13px; }
 .ai-trace-label { margin-top: 6px; color: var(--muted); font-size: 12px; }
 .ai-trace-pre { white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; font-size: 11px; background: var(--surface); border-radius: 6px; padding: 6px; }
+
+
+/* Live AI stream */
+.ai-live-pre { white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow: auto; font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }

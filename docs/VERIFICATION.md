@@ -123,3 +123,18 @@ CI 矩阵新增 macOS x86_64、Linux arm64、Windows arm64；构建后运行无�
 - **导出**：`POST /api/report/export` 生成 ZIP，含 `report.html`、`analysis.json`、`final_scores.csv`、`pairs.csv`、`anomalies.csv`、`report.pdf`、`ai-explanations.*`、`ai-trace.json`；PDF 中文渲染 5 页；`GET .../download` 返回 200。
 - **确定性**：winnowing 改用 BLAKE2b；连续两次独立进程分析结果一致（730 对 / 13 簇 / 76 异常）。
 - 全量测试 153 passed。
+
+## 9. v0.1.3 验证（2026-10-23）
+
+### 桌面导出位置
+
+- 设置新增 `settings-export-dir` 与「选择导出文件夹…」；桌面通过 pywebview `FOLDER_DIALOG` 原生选择器，浏览器不可用时提示手动输入。
+- `/api/report/export` 接收 `save_dir`，检查目录可写后直接把 ZIP 写入；实测指定 `/tmp/ojs-ui-export`，返回路径 `.../OJ-Sentinel-report-...zip`，界面显示“已保存”。
+- 无法使用原生选择器时仍保留浏览器下载回退。
+
+### AI 实时输出
+
+- DSH 命令加 `--json`，逐行读取事件：`session/status/thinking/text/final`。
+- `/api/ai/live/{trace_id}` 在调用完成前返回 `done=false`、当前调用及 `stream_text`/`stream_events`；完成后 `done=true`。
+- 实测一次真实 DSH 复核：先返回 `turn_start/step_start`，随后 `thinking`、`text`，最终 `done=true`；GUI 显示实时面板与最终“AI 调用详情”。
+- 全量测试 155 passed。
