@@ -87,7 +87,8 @@ ojs final --homework YOUR_HOMEWORK_ID --domain YOUR_DOMAIN --csv final_scores.cs
 根因：PyInstaller 冻结后 `sys.executable` 是 `OJ Sentinel` 应用，不是 Python；学生代码和
 `checker.py` 都被应用自身启动，导致打包版本地评测全部异常。
 
-验证（打包后的 macOS arm64 `.app`，最小 PATH `/usr/bin:/bin`，`OJS_DATA_DIR` 指向真实快照）：
+验证（从 v0.1.1 Release 下载 `macos-arm64.dmg` 挂载后运行 `.app`，最小 PATH `/usr/bin:/bin`，
+`OJS_DATA_DIR` 指向真实快照）：
 
 | 提交 | OJ | 本地 | 结果 |
 | --- | --- | --- | --- |
