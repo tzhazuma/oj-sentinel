@@ -120,6 +120,7 @@ def build_reports(
     out_dir: Path | None = None,
     top_pairs: int = 300,
     redact: bool = False,
+    include_all_pairs: bool = False,
 ) -> dict[str, str]:
     data = _load(analysis)
     if redact:
@@ -141,7 +142,7 @@ def build_reports(
 
     all_pairs = data.get("pairs", [])
     substantial = [p for p in all_pairs if p.get("substantial", True)]
-    pairs = (substantial or all_pairs)[:top_pairs]
+    pairs = (all_pairs if include_all_pairs else (substantial or all_pairs))[:top_pairs]
     if not redact:
         _attach_code(pairs, snap)
     env = Environment(

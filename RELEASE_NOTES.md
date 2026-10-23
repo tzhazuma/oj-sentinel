@@ -1,44 +1,28 @@
-# OJ Sentinel v0.1.3
+# OJ Sentinel v0.1.4
 
-修复桌面版导出位置不可选，并加入 AI 实时输出。
+修复导出 ZIP **缺少 report.html / CSV** 的关键问题，并让导出自动补全完整报告。
 
-## 1. 导出位置（桌面原生选择器）
+## 根因
 
-上一版依赖 pywebview 的“保存文件”回调，实际运行时用户看不到位置选择。现在改为更可靠的方案：
+桌面版刚刚运行完分析时，分析目录里可能只有 `analysis.json`，还没有 `report.html`、`final_scores.csv`、`pairs.csv`、`anomalies.csv`。旧导出逻辑只做“复制已有文件”，缺失项直接跳过，于是 ZIP 里只剩 `analysis.json` 和一个 PDF，用户看到内容不全。
 
-- 设置 → 数据与报告新增 **默认导出位置**。
-- **“选择导出文件夹…”** 调用系统原生文件夹选择器（pywebview `FOLDER_DIALOG`），选完直接填入路径并保存。
-- 导出报告时，服务端直接把 ZIP 写入该目录，不再依赖浏览器下载或事后保存对话框；完成后显示完整路径。
-- 未设置时仍使用数据目录 `exports/`；浏览器无法拿到本机绝对路径时按旧方式下载。
-- 路径会做创建/可写性检查，失败时给出明确错误。
+## 修复
 
-## 2. AI 实时输出
+- 导出时先检查四个核心文件；只要缺一个，就用当前快照/分析**自动生成完整 HTML 与 CSV**，再打包。
+- 生成失败会写入明确的 warning，而不是静默跳过。
+- `report.html` / CSV 生成支持 `include_all_pairs=True`：导出全部可疑对，而不是只导出“substantial”子集。
+- 报告模板兼容旧版 analysis.json（缺少 `codebert_cosine`、`longest_fragment`、`token_coverage` 字段时不再报 Jinja UndefinedError）。
+- ZIP 同时带上已有的 `judge_batch.json/csv`（若存在）。
+- PDF 最多展示 80 对（避免页面过大），完整内容在 HTML/CSV/JSON 中。
+- 导出位置仍由设置中的原生文件夹选择器决定；也可直接调用接口传入 `save_dir`。
 
-- DSH 改为 `dsh --profile headless --patch ... --json`，逐行读取 newline-delimited 事件：
-  - `session` / `status`（turn/step）
-  - `thinking`
-  - `text`
-  - `final`
-- 新增 `/api/ai/live/{trace_id}`：AI 请求进行中即可轮询已收到的流式文本和事件。
-- GUI 的 AI 复核 / 作品评测在等待期间显示 **实时输出面板**，不再是空白等待；完成后仍保留完整“AI 调用详情”（Prompt、命令、原始输出、解析 JSON、错误）。
-- 每个 AI 调用仍保存到 `data/ai-traces/`，导出 ZIP 中带 `ai-trace.json`。
+## 验证
 
-## 3. 其它
+- 用桌面 App 数据目录（此前 ZIP 只有 4 个文件）重新导出：自动生成 `report.html`（全部 1000 对）、`final_scores.csv`、`pairs.csv`、`anomalies.csv`，ZIP 从 224 KB 变为约 2.5 MB，warning 为 0。
+- 用完整仓库快照生成完整报告：730 对 / 13 簇 / 76 异常，HTML 约 4.6 MB，输出到 `~/Downloads`。
+- 全量测试通过。
 
-- 版本号 `0.1.3`（App、API、安装包一致）。
-- 全量测试通过（version 0.1.3 构建）。
-- 多架构安装包：macOS arm64/x86_64、Windows amd64/arm64、Linux x86_64/arm64、Android。
+## 版本
 
-## 验证重点
-
-- 设置导出位置 `/tmp/...` 后导出，ZIP 直接出现在该目录，界面显示路径。
-- DSH 调用期间 `/api/ai/live/<trace_id>` 依次返回 session/status/thinking/text/final；`done` 从 false 变 true。
-- macOS 打包 App 中运行导出与 AI 调用均使用同一套代码。
-
-## 升级
-
-```bash
-git pull
-pip install -e ".[dev,desktop]"
-pytest -q
-```
+- `0.1.4`
+- 多架构包：macOS arm64/x86_64、Windows amd64/arm64、Linux x86_64/arm64、Android。

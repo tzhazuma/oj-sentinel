@@ -138,3 +138,13 @@ CI 矩阵新增 macOS x86_64、Linux arm64、Windows arm64；构建后运行无�
 - `/api/ai/live/{trace_id}` 在调用完成前返回 `done=false`、当前调用及 `stream_text`/`stream_events`；完成后 `done=true`。
 - 实测一次真实 DSH 复核：先返回 `turn_start/step_start`，随后 `thinking`、`text`，最终 `done=true`；GUI 显示实时面板与最终“AI 调用详情”。
 - 全量测试 155 passed。
+
+## 10. v0.1.4 导出完整性修复（2026-10-23）
+
+- 现象：下载的 ZIP 只有 `analysis.json` + PDF，缺 `report.html`、`final_scores.csv`、`pairs.csv`、`anomalies.csv`，manifest 有 4 条“缺少…”warning。
+- 根因：分析后尚未生成 HTML/CSV，导出只复制已有文件。
+- 修复：导出时检测缺失，调用 `build_reports(..., include_all_pairs=True)` 自动生成完整 HTML/CSV，再打包；模板兼容旧 analysis 缺少新字段；附带 `judge_batch.*`。
+- 验证：
+  - 桌面 App 数据目录（1000 对）重新导出：ZIP 2.5 MB，`report.html` 存在，warning 0。
+  - 完整快照导出：730 对 / 13 簇 / 76 异常，HTML 4.6 MB，`final_scores.csv` 62 KB，`pairs.csv` 223 KB，`anomalies.csv` 27 KB，PDF 34 KB，AI 解释与 ai-trace 各一份。
+  - 最终完整包：`~/Downloads/OJ-Sentinel-report-20261023-184508.zip`（11 个文件）。

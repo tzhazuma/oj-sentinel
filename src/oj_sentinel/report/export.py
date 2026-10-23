@@ -263,8 +263,37 @@ def build_export(
     work = Path(tempfile.mkdtemp(prefix="ojs-export-", dir=str(out_dir)))
     warnings: list[str] = []
     try:
-        # Core data files.
+        # Core data files.  A freshly analyzed snapshot may not have the
+        # HTML/CSV yet; generate them instead of exporting a ZIP that only
+        # contains analysis.json (the bug seen in the desktop export).
+        core_names = ("report.html", "final_scores.csv", "pairs.csv", "anomalies.csv")
+        missing = [name for name in core_names if not (source_dir / name).exists()]
+        if missing:
+            _emit(on_event, "检测到缺失的 HTML/CSV，正在从快照生成完整报告…")
+            generated = work / "_generated"
+            try:
+                from .builder import build_reports
+
+                build_reports(
+                    analysis_file,
+                    Path(snapshot_root),
+                    out_dir=generated,
+                    top_pairs=max(300, int(top_pairs)),
+                    include_all_pairs=True,
+                )
+                for name in core_names:
+                    src = generated / name
+                    if src.exists():
+                        shutil.copy2(src, work / name)
+                _emit(on_event, "已生成缺失的 report.html / CSV")
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"自动生成 HTML/CSV 失败：{type(exc).__name__}: {exc}")
+                _emit(on_event, warnings[-1])
+            finally:
+                shutil.rmtree(generated, ignore_errors=True)
         for name in ("report.html", "analysis.json", "final_scores.csv", "pairs.csv", "anomalies.csv"):
+            if (work / name).exists():
+                continue
             src = source_dir / name
             if not src.exists() and name == "analysis.json":
                 src = analysis_file
@@ -272,6 +301,10 @@ def build_export(
                 shutil.copy2(src, work / name)
             elif name != "analysis.json":
                 warnings.append(f"缺少 {name}，已跳过")
+        if (source_dir / "judge_batch.json").exists():
+            shutil.copy2(source_dir / "judge_batch.json", work / "judge_batch.json")
+        if (source_dir / "judge_batch.csv").exists():
+            shutil.copy2(source_dir / "judge_batch.csv", work / "judge_batch.csv")
         _emit(on_event, "已收集 HTML/JSON/CSV")
 
         pairs = list(analysis.get("pairs") or [])
@@ -320,7 +353,8 @@ def build_export(
         if include_pdf:
             _emit(on_event, "生成 PDF（中文字体、理由、异常、AI 解释）")
             try:
-                build_pdf(analysis, ai_text=ai_text, top_pairs=top_pairs, out_path=work / "report.pdf")
+                build_pdf(analysis, ai_text=ai_text, top_pairs=min(80, max(1, int(top_pairs))),
+                          out_path=work / "report.pdf")
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"PDF 生成失败：{type(exc).__name__}: {exc}")
                 _emit(on_event, warnings[-1])
